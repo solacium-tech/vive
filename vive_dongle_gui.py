@@ -34,7 +34,7 @@ HEADER_BG = "#263238"
 
 COLUMNS = (
     ("radio",   "Radio link (to dongle)",        170, "w"),
-    ("drops",   "Link drops",                     80, "center"),
+    ("drops",   "Radio drops",                    85, "center"),
     ("optic",   "Lighthouse (line of sight)",    170, "w"),
     ("rate",    "Updates/sec",                    90, "center"),
     ("batt",    "Battery",                        70, "center"),
@@ -162,6 +162,12 @@ class MonitorApp:
                                   fg="#0277bd", bg="#eceff1", cursor="hand2",
                                   state="disabled")
         self.logs_btn.pack(side="right", padx=8)
+        self.open_report_btn = tk.Button(bar, text="Open report",
+                                         command=self._open_report,
+                                         relief="flat", fg="#0277bd",
+                                         bg="#eceff1", cursor="hand2",
+                                         state="disabled")
+        self.open_report_btn.pack(side="right", padx=2)
         self.elapsed_var = tk.StringVar(value="")
         tk.Label(bar, textvariable=self.elapsed_var, bg="#eceff1",
                  anchor="e").pack(side="right", padx=8)
@@ -199,16 +205,15 @@ class MonitorApp:
         self.mon.stop()
         self.mon.join(timeout=5)
         self.log_dir = os.path.abspath(self.mon.log_dir)
-        report = getattr(self.mon, "report_path", None)
+        self.report_path = getattr(self.mon, "report_path", None)
         self.mon = None
         self.start_btn.config(state="normal")
         self.stop_btn.config(state="disabled")
-        self._set_banner("idle", "Monitoring stopped. Report saved and "
-                                 "opened in your browser.")
+        self.open_report_btn.config(state="normal")
+        self._set_banner("idle", "Monitoring stopped. Report saved - use "
+                                 "\"Open report\" to view it.")
         self.status_var.set(f"Report files saved in: {self.log_dir}")
         self._log_line("info", "Monitoring stopped, report saved.")
-        if report and os.path.isfile(report):
-            self._open_file(os.path.abspath(report))
 
     @staticmethod
     def _open_file(path):
@@ -232,6 +237,13 @@ class MonitorApp:
             messagebox.showinfo(APP_TITLE, "No reports have been saved yet.")
             return
         self._open_file(path)
+
+    def _open_report(self):
+        report = getattr(self, "report_path", None)
+        if report and os.path.isfile(report):
+            self._open_file(os.path.abspath(report))
+        else:
+            messagebox.showinfo(APP_TITLE, "No report has been saved yet.")
 
     # ---- periodic refresh ----
 
@@ -311,7 +323,7 @@ class MonitorApp:
                         f"{op_word}  -  {r['optical_loss_pct']:.2f}% lost",
                         f"{r['update_hz']:.0f}",
                         batt,
-                        "Yes" if r["connected"] else "NO")
+                        "Up" if r["connected"] else "DOWN")
                 if self.tree.exists(iid):
                     self.tree.item(iid, values=vals, tags=(r["severity"],))
                 else:

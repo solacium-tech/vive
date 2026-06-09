@@ -43,7 +43,9 @@ RF, not to the lighthouses.
   colour-coded per row. Every row carries two independent verdicts side by
   side, each with the percentage of time lost: "Radio link (to dongle)",
   e.g. `FAILING - 4.82% lost`, and "Lighthouse (line of sight)", e.g.
-  `Good - 0.30% lost`, plus link drops, update rate, battery and connection.
+  `Good - 0.30% lost`, plus radio drops, update rate, battery and link state
+  (Up/Down). Radio drops count full losses of the dongle link, so they belong
+  to the radio side, never the lighthouse side.
 - **Legend** - explains the colours and the radio/lighthouse distinction.
 - **Event log** - timestamped link-loss events as they happen.
 - **Status bar** - elapsed time, tracker count, "Open reports folder".
@@ -62,9 +64,10 @@ with CLI flags for scripted or timed runs.
 
 All files are written to a `logs\` folder created next to the executable.
 
-1. **HTML report** - `logs/<site>_<timestamp>_report.html`. Self-contained,
-   colour-coded, opens automatically in the default browser when monitoring
-   is stopped from the GUI. Contains a one-line conclusion banner, the
+1. **HTML report** - `logs/<site>_<timestamp>_report.html`. Self-contained
+   and colour-coded; saved when monitoring stops. Open it with the GUI's
+   "Open report" button or by double-clicking the file. Contains a one-line
+   conclusion banner, the
    per-dongle ranking (worst radio link first), a recommendation when one
    dongle stands out, and a per-tracker table. This is the file to read
    first; `docs/sample_report.html` shows an example.

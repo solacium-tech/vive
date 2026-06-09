@@ -307,7 +307,7 @@ def build_report_html(site, snap, generated=None):
                  "reach this dongle. Lighthouse loss means trackers could "
                  "not see the base stations (not a dongle problem).</p>")
     parts.append("<table><tr><th>Dongle</th><th>Trackers</th>"
-                 "<th>Radio link</th><th>Link drops</th><th>Stalls</th>"
+                 "<th>Radio link</th><th>Radio drops</th><th>Stalls</th>"
                  "<th>Lighthouse</th></tr>")
     for dongle, a in ranked:
         rw, rs = rf_verdict(a["rf_loss_pct"])
@@ -337,7 +337,7 @@ def build_report_html(site, snap, generated=None):
     # Per-tracker table
     parts.append("<h2>Trackers</h2>")
     parts.append("<table><tr><th>Tracker</th><th>Dongle</th>"
-                 "<th>Radio link</th><th>Link drops</th>"
+                 "<th>Radio link</th><th>Radio drops</th>"
                  "<th>Longest drop</th><th>Lighthouse</th>"
                  "<th>Battery</th></tr>")
     for r in sorted(rows, key=lambda r: (-r["rf_loss_pct"], r["serial"])):
