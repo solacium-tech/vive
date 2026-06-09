@@ -60,13 +60,19 @@ with CLI flags for scripted or timed runs.
 
 ## Outputs
 
-1. Live view (GUI or console).
-2. CSV time series, one row per tracker per second:
-   `logs/<site>_<timestamp>_series.csv`. Suitable for Excel or pandas.
-3. Event log with timestamped link-loss events:
-   `logs/<site>_<timestamp>_events.log`.
-4. Run summary on stop: per-dongle ranking (worst first), a best-vs-worst
-   dongle comparison, and a per-tracker classification.
+All files are written to a `logs\` folder created next to the executable.
+
+1. **HTML report** - `logs/<site>_<timestamp>_report.html`. Self-contained,
+   colour-coded, opens automatically in the default browser when monitoring
+   is stopped from the GUI. Contains a one-line conclusion banner, the
+   per-dongle ranking (worst radio link first), a recommendation when one
+   dongle stands out, and a per-tracker table. This is the file to read
+   first; `docs/sample_report.html` shows an example.
+2. **CSV time series** - `logs/<site>_<timestamp>_series.csv`, one row per
+   tracker per second. For Excel or pandas.
+3. **Event log** - `logs/<site>_<timestamp>_events.log`, timestamped
+   link-loss events, with the text summary appended at the end.
+4. Live view (GUI or console) while running.
 
 ## Build
 

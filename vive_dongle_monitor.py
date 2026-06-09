@@ -133,8 +133,9 @@ def main():
         mon.stop()
         mon.join(timeout=5)
         print("\n" + mon.verdict_text())
-        if not args.no_log and getattr(mon, "event_path", None):
-            print(c(f"\nLogs: {os.path.abspath(args.log_dir)}", CYAN))
+        if not args.no_log and getattr(mon, "report_path", None):
+            print(c(f"\nReport: {os.path.abspath(mon.report_path)}", CYAN))
+            print(c(f"Logs:   {os.path.abspath(args.log_dir)}", CYAN))
         if os.name == "nt":
             try:
                 input("\nPress Enter to exit...")

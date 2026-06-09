@@ -221,6 +221,145 @@ def _is_tracked_class(cls):
                    openvr.TrackedDeviceClass_Controller)
 
 
+_REPORT_CSS = """
+body { font-family: 'Segoe UI', Arial, sans-serif; margin: 24px auto;
+       max-width: 900px; color: #263238; }
+h1 { font-size: 22px; margin-bottom: 2px; }
+.meta { color: #546e7a; margin-bottom: 18px; }
+.banner { padding: 14px 18px; border-radius: 6px; font-size: 16px;
+          font-weight: 600; margin: 14px 0 22px 0; }
+.banner.healthy { background: #2e7d32; color: #fff; }
+.banner.warn { background: #ffb300; color: #3e2723; }
+.banner.crit { background: #c62828; color: #fff; }
+table { border-collapse: collapse; width: 100%; margin: 8px 0 22px 0; }
+th { background: #cfd8dc; text-align: left; padding: 7px 10px;
+     font-size: 13px; }
+td { padding: 7px 10px; font-size: 13px; border-bottom: 1px solid #eceff1; }
+td.num { text-align: right; }
+.v { font-weight: 600; padding: 2px 8px; border-radius: 4px; }
+.v.healthy { background: #e8f5e9; color: #1b5e20; }
+.v.warn { background: #fff3e0; color: #7a4f01; }
+.v.crit { background: #ffebee; color: #b71c1c; }
+.advice { background: #e3f2fd; border-left: 4px solid #0277bd;
+          padding: 12px 16px; margin: 0 0 22px 0; }
+.files { color: #546e7a; font-size: 12px; }
+h2 { font-size: 16px; margin-bottom: 4px; }
+.note { color: #546e7a; font-size: 12px; margin-top: -2px; }
+"""
+
+
+def _vcell(word, sev, pct):
+    return (f"<span class='v {sev}'>{word}</span> "
+            f"&nbsp;{pct:.2f}% lost")
+
+
+def build_report_html(site, snap, generated=None):
+    """Render a self-contained HTML report from a snapshot dict."""
+    generated = generated or datetime.now()
+    rows = snap["rows"]
+    agg = snap["aggregates"]
+    elapsed = snap["elapsed"]
+
+    parts = ["<!DOCTYPE html><html><head><meta charset='utf-8'>",
+             f"<title>Tracker link report - {site}</title>",
+             f"<style>{_REPORT_CSS}</style></head><body>",
+             "<h1>Vive Tracker Link Report</h1>",
+             f"<div class='meta'>Location: <b>{site}</b> &nbsp;|&nbsp; "
+             f"{generated.strftime('%d %b %Y, %H:%M')} &nbsp;|&nbsp; "
+             f"monitored for {elapsed:.0f}s &nbsp;|&nbsp; "
+             f"{len(rows)} tracker(s)</div>"]
+
+    if not rows:
+        parts.append("<div class='banner warn'>No trackers were observed. "
+                     "Check SteamVR was running and trackers were powered "
+                     "on.</div></body></html>")
+        return "".join(parts)
+
+    ranked = sorted(agg.items(), key=lambda kv: kv[1]["rf_loss_pct"],
+                    reverse=True)
+    worst_d, worst = ranked[0]
+    rf_word, rf_sev = rf_verdict(worst["rf_loss_pct"])
+
+    # Overall conclusion banner
+    if rf_sev == CRIT:
+        parts.append(f"<div class='banner crit'>RADIO PROBLEM: dongle "
+                     f"{worst_d} lost its radio link "
+                     f"{worst['rf_loss_pct']:.1f}% of the time "
+                     f"({worst['dropouts']} drops). The dongle, not the "
+                     f"lighthouses, is the bottleneck.</div>")
+    elif rf_sev == WARN:
+        parts.append(f"<div class='banner warn'>Weak radio link on dongle "
+                     f"{worst_d} ({worst['rf_loss_pct']:.1f}% loss). Worth "
+                     f"checking its position.</div>")
+    else:
+        opt_bad = [r for r in rows if r["family"] == "optic"]
+        if opt_bad:
+            names = ", ".join(r["serial"] for r in opt_bad)
+            parts.append(f"<div class='banner warn'>Radio links healthy. "
+                         f"Lighthouse visibility issues on: {names}.</div>")
+        else:
+            parts.append("<div class='banner healthy'>All radio links and "
+                         "lighthouse visibility healthy.</div>")
+
+    # Per-dongle table
+    parts.append("<h2>Dongles (worst radio link first)</h2>")
+    parts.append("<p class='note'>Radio loss means the tracker could not "
+                 "reach this dongle. Lighthouse loss means trackers could "
+                 "not see the base stations (not a dongle problem).</p>")
+    parts.append("<table><tr><th>Dongle</th><th>Trackers</th>"
+                 "<th>Radio link</th><th>Link drops</th><th>Stalls</th>"
+                 "<th>Lighthouse</th></tr>")
+    for dongle, a in ranked:
+        rw, rs = rf_verdict(a["rf_loss_pct"])
+        ow, osev = optical_verdict(a["optical_loss_pct"])
+        parts.append(f"<tr><td><b>{dongle}</b></td>"
+                     f"<td class='num'>{a['count']}</td>"
+                     f"<td>{_vcell(rw, rs, a['rf_loss_pct'])}</td>"
+                     f"<td class='num'>{a['dropouts']}</td>"
+                     f"<td class='num'>{a['stalls']}</td>"
+                     f"<td>{_vcell(ow, osev, a['optical_loss_pct'])}</td></tr>")
+    parts.append("</table>")
+
+    # Recommendation
+    if len(ranked) >= 2:
+        best_d, best = ranked[-1]
+        if worst["rf_loss_pct"] >= RF_LOSS_WARN and \
+                worst["rf_loss_pct"] >= 2 * max(best["rf_loss_pct"], 0.01):
+            ratio = worst["rf_loss_pct"] / max(best["rf_loss_pct"], 0.01)
+            parts.append(f"<div class='advice'><b>Recommendation:</b> dongle "
+                         f"{worst_d} has {ratio:.1f}x the radio loss of the "
+                         f"best dongle ({best_d}). Check its position: raise "
+                         f"it 1.5-2 m on a USB extension, clear of the "
+                         f"floor, metal, USB 3.0 ports/cables and other "
+                         f"dongles, then run this monitor again to "
+                         f"compare.</div>")
+
+    # Per-tracker table
+    parts.append("<h2>Trackers</h2>")
+    parts.append("<table><tr><th>Tracker</th><th>Dongle</th>"
+                 "<th>Radio link</th><th>Link drops</th>"
+                 "<th>Longest drop</th><th>Lighthouse</th>"
+                 "<th>Battery</th></tr>")
+    for r in sorted(rows, key=lambda r: (-r["rf_loss_pct"], r["serial"])):
+        rw, rs = rf_verdict(r["rf_loss_pct"])
+        ow, osev = optical_verdict(r["optical_loss_pct"])
+        batt = f"{r['battery']:.0f}%" if r["battery"] is not None else "?"
+        parts.append(f"<tr><td><b>{r['serial']}</b></td>"
+                     f"<td>{r['dongle']}</td>"
+                     f"<td>{_vcell(rw, rs, r['rf_loss_pct'])}</td>"
+                     f"<td class='num'>{r['disconnect_events']}</td>"
+                     f"<td class='num'>{r['longest_disconnect_s']:.1f}s</td>"
+                     f"<td>{_vcell(ow, osev, r['optical_loss_pct'])}</td>"
+                     f"<td class='num'>{batt}</td></tr>")
+    parts.append("</table>")
+
+    parts.append("<p class='files'>Raw data: the per-second CSV and the "
+                 "event log were saved in the same folder as this report. "
+                 "Generated by the Vive Tracker Link Monitor.</p>")
+    parts.append("</body></html>")
+    return "".join(parts)
+
+
 class RFMonitor(threading.Thread):
     """Background sampler. Consumers call snapshot() for a thread-safe view."""
 
@@ -384,6 +523,8 @@ class RFMonitor(threading.Thread):
         safe = "".join(c for c in self.site if c.isalnum() or c in "-_")
         csv_path = os.path.join(self.log_dir, f"{safe}_{stamp}_series.csv")
         evt_path = os.path.join(self.log_dir, f"{safe}_{stamp}_events.log")
+        self.report_path = os.path.join(self.log_dir,
+                                        f"{safe}_{stamp}_report.html")
         self._csv_file = open(csv_path, "w", newline="", encoding="utf-8")
         self._csv_writer = csv.writer(self._csv_file)
         self._csv_writer.writerow([
@@ -426,6 +567,10 @@ class RFMonitor(threading.Thread):
             self._event_file.close()
         if self._csv_file:
             self._csv_file.close()
+        if getattr(self, "report_path", None):
+            html = build_report_html(self.site, self.snapshot())
+            with open(self.report_path, "w", encoding="utf-8") as f:
+                f.write(html)
         try:
             if self._vr is not None:
                 openvr.shutdown()

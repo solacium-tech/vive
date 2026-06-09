@@ -198,15 +198,27 @@ class MonitorApp:
             return
         self.mon.stop()
         self.mon.join(timeout=5)
-        summary = self.mon.verdict_text()
         self.log_dir = os.path.abspath(self.mon.log_dir)
+        report = getattr(self.mon, "report_path", None)
         self.mon = None
         self.start_btn.config(state="normal")
         self.stop_btn.config(state="disabled")
-        self._set_banner("idle", "Monitoring stopped. Report saved.")
+        self._set_banner("idle", "Monitoring stopped. Report saved and "
+                                 "opened in your browser.")
         self.status_var.set(f"Report files saved in: {self.log_dir}")
         self._log_line("info", "Monitoring stopped, report saved.")
-        self._show_summary(summary)
+        if report and os.path.isfile(report):
+            self._open_file(os.path.abspath(report))
+
+    @staticmethod
+    def _open_file(path):
+        try:
+            if os.name == "nt":
+                os.startfile(path)
+            else:
+                subprocess.Popen(["xdg-open", path])
+        except Exception:
+            pass
 
     def _on_close(self):
         if self.mon:
@@ -219,19 +231,7 @@ class MonitorApp:
         if not os.path.isdir(path):
             messagebox.showinfo(APP_TITLE, "No reports have been saved yet.")
             return
-        if os.name == "nt":
-            os.startfile(path)
-        else:
-            subprocess.Popen(["xdg-open", path])
-
-    def _show_summary(self, text):
-        win = tk.Toplevel(self.root)
-        win.title("Run summary")
-        win.geometry("780x540")
-        box = scrolledtext.ScrolledText(win, wrap="none", font=("Consolas", 9))
-        box.pack(fill="both", expand=True)
-        box.insert("1.0", text)
-        box.config(state="disabled")
+        self._open_file(path)
 
     # ---- periodic refresh ----
 
