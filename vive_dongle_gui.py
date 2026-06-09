@@ -202,18 +202,58 @@ class MonitorApp:
     def stop(self):
         if not self.mon:
             return
+        site = self.mon.site
         self.mon.stop()
         self.mon.join(timeout=5)
+        snap = self.mon.snapshot()
         self.log_dir = os.path.abspath(self.mon.log_dir)
         self.report_path = getattr(self.mon, "report_path", None)
         self.mon = None
         self.start_btn.config(state="normal")
         self.stop_btn.config(state="disabled")
         self.open_report_btn.config(state="normal")
-        self._set_banner("idle", "Monitoring stopped. Report saved - use "
-                                 "\"Open report\" to view it.")
+        self._set_banner("idle", "Monitoring stopped. Report saved.")
         self.status_var.set(f"Report files saved in: {self.log_dir}")
         self._log_line("info", "Monitoring stopped, report saved.")
+        self._show_summary_window(site, snap)
+
+    # Colours for the summary window, keyed by report line tag.
+    SUMMARY_TAGS = {
+        "title":          {"font": ("Segoe UI", 14, "bold")},
+        "meta":           {"foreground": "#546e7a"},
+        "banner-healthy": {"background": "#2e7d32", "foreground": "#ffffff",
+                           "font": ("Segoe UI", 11, "bold")},
+        "banner-warn":    {"background": "#ffb300", "foreground": "#3e2723",
+                           "font": ("Segoe UI", 11, "bold")},
+        "banner-crit":    {"background": "#c62828", "foreground": "#ffffff",
+                           "font": ("Segoe UI", 11, "bold")},
+        "h2":             {"font": ("Segoe UI", 11, "bold")},
+        "note":           {"foreground": "#546e7a"},
+        "header":         {"background": "#cfd8dc",
+                           "font": ("Consolas", 10, "bold")},
+        "row-healthy":    {"background": "#e8f5e9", "foreground": "#1b5e20"},
+        "row-warn":       {"background": "#fff3e0", "foreground": "#7a4f01"},
+        "row-crit":       {"background": "#ffebee", "foreground": "#b71c1c"},
+        "advice":         {"background": "#e3f2fd", "foreground": "#01579b"},
+        "plain":          {},
+    }
+
+    def _show_summary_window(self, site, snap):
+        win = tk.Toplevel(self.root)
+        win.title(f"Run summary - {site}")
+        win.geometry("920x560")
+        text = tk.Text(win, font=("Consolas", 10), wrap="none",
+                       padx=12, pady=10, relief="flat")
+        vsb = ttk.Scrollbar(win, orient="vertical", command=text.yview)
+        text.configure(yscroll=vsb.set)
+        text.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
+        for tag, opts in self.SUMMARY_TAGS.items():
+            if opts:
+                text.tag_configure(tag, **opts)
+        for tag, line in core.build_report_lines(site, snap):
+            text.insert("end", line + "\n", (tag,))
+        text.config(state="disabled")
 
     @staticmethod
     def _open_file(path):

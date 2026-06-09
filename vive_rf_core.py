@@ -18,6 +18,7 @@ Front-ends: vive_dongle_monitor.py (console), vive_dongle_gui.py (GUI).
 
 import csv
 import os
+import textwrap
 import threading
 import time
 from collections import defaultdict, deque
@@ -91,6 +92,14 @@ class TrackerStat:
         self.stall_events = 0
         self._in_stall = False
 
+        # per-CSV-interval window counters (reset on every CSV row)
+        self.win_samples = 0
+        self.win_connected = 0
+        self.win_rf_loss = 0
+        self.win_oor = 0
+        self.win_drops = 0
+        self.win_stalls = 0
+
         # connect/disconnect edges
         self.was_connected = True
         self.disconnect_events = 0
@@ -105,16 +114,19 @@ class TrackerStat:
     def update(self, pose, packet_num, now, dt):
         """Fold in one sample. Returns True on a connected->down edge."""
         self.samples += 1
+        self.win_samples += 1
         connected = bool(pose.bDeviceIsConnected)
         dropped_edge = False
 
         if connected:
             self.connected_samples += 1
+            self.win_connected += 1
             self.connected_elapsed_s += dt
             if pose.bPoseIsValid:
                 self.pose_valid_samples += 1
             if pose.eTrackingResult == openvr.TrackingResult_Running_OutOfRange:
                 self.out_of_range_samples += 1
+                self.win_oor += 1
 
             if packet_num is not None:
                 if self.last_packet is None:
@@ -129,14 +141,17 @@ class TrackerStat:
                       and (now - self.last_packet_time) * 1000.0 > STALL_MS
                       and not self._in_stall):
                     self.stall_events += 1
+                    self.win_stalls += 1
                     self._in_stall = True
         else:
             self.rf_loss_samples += 1
+            self.win_rf_loss += 1
 
         if not connected and self.was_connected:
             self.in_disconnect = True
             self.disconnect_start = now
             self.disconnect_events += 1
+            self.win_drops += 1
             dropped_edge = True
         elif connected and not self.was_connected:
             if self.disconnect_start is not None:
@@ -201,6 +216,21 @@ class TrackerStat:
             "connected": self.was_connected,
         }
 
+    def pop_window(self):
+        """Return and reset the per-interval counters (one CSV row's worth)."""
+        w = {
+            "rf_down_pct": (100.0 * self.win_rf_loss / self.win_samples
+                            if self.win_samples else 0.0),
+            "oor_pct": (100.0 * self.win_oor / self.win_connected
+                        if self.win_connected else 0.0),
+            "drops": self.win_drops,
+            "stalls": self.win_stalls,
+        }
+        self.win_samples = self.win_connected = 0
+        self.win_rf_loss = self.win_oor = 0
+        self.win_drops = self.win_stalls = 0
+        return w
+
 
 def _get_str(vr, idx, prop):
     try:
@@ -221,143 +251,128 @@ def _is_tracked_class(cls):
                    openvr.TrackedDeviceClass_Controller)
 
 
-_REPORT_CSS = """
-body { font-family: 'Segoe UI', Arial, sans-serif; margin: 24px auto;
-       max-width: 900px; color: #263238; }
-h1 { font-size: 22px; margin-bottom: 2px; }
-.meta { color: #546e7a; margin-bottom: 18px; }
-.banner { padding: 14px 18px; border-radius: 6px; font-size: 16px;
-          font-weight: 600; margin: 14px 0 22px 0; }
-.banner.healthy { background: #2e7d32; color: #fff; }
-.banner.warn { background: #ffb300; color: #3e2723; }
-.banner.crit { background: #c62828; color: #fff; }
-table { border-collapse: collapse; width: 100%; margin: 8px 0 22px 0; }
-th { background: #cfd8dc; text-align: left; padding: 7px 10px;
-     font-size: 13px; }
-td { padding: 7px 10px; font-size: 13px; border-bottom: 1px solid #eceff1; }
-td.num { text-align: right; }
-.v { font-weight: 600; padding: 2px 8px; border-radius: 4px; }
-.v.healthy { background: #e8f5e9; color: #1b5e20; }
-.v.warn { background: #fff3e0; color: #7a4f01; }
-.v.crit { background: #ffebee; color: #b71c1c; }
-.advice { background: #e3f2fd; border-left: 4px solid #0277bd;
-          padding: 12px 16px; margin: 0 0 22px 0; }
-.files { color: #546e7a; font-size: 12px; }
-h2 { font-size: 16px; margin-bottom: 4px; }
-.note { color: #546e7a; font-size: 12px; margin-top: -2px; }
-"""
+def build_report_lines(site, snap, generated=None):
+    """Build the run report as (tag, text) line pairs.
 
-
-def _vcell(word, sev, pct):
-    return (f"<span class='v {sev}'>{word}</span> "
-            f"&nbsp;{pct:.2f}% lost")
-
-
-def build_report_html(site, snap, generated=None):
-    """Render a self-contained HTML report from a snapshot dict."""
+    Tags: title, meta, banner-healthy/-warn/-crit, h2, note, header,
+    row-healthy/-warn/-crit, advice, plain. The text renderer below and the
+    GUI summary window both consume this, so they always show the same
+    report.
+    """
     generated = generated or datetime.now()
     rows = snap["rows"]
     agg = snap["aggregates"]
     elapsed = snap["elapsed"]
+    out = []
 
-    parts = ["<!DOCTYPE html><html><head><meta charset='utf-8'>",
-             f"<title>Tracker link report - {site}</title>",
-             f"<style>{_REPORT_CSS}</style></head><body>",
-             "<h1>Vive Tracker Link Report</h1>",
-             f"<div class='meta'>Location: <b>{site}</b> &nbsp;|&nbsp; "
-             f"{generated.strftime('%d %b %Y, %H:%M')} &nbsp;|&nbsp; "
-             f"monitored for {elapsed:.0f}s &nbsp;|&nbsp; "
-             f"{len(rows)} tracker(s)</div>"]
+    def emit(tag, text, width=76):
+        # prose lines are wrapped so the .txt reads cleanly in Notepad
+        for line in textwrap.wrap(text, width) or [""]:
+            out.append((tag, line))
+
+    out.append(("title", "VIVE TRACKER LINK REPORT"))
+    out.append(("meta", f"Location: {site}    "
+                f"{generated.strftime('%d %b %Y, %H:%M')}    "
+                f"monitored for {elapsed:.0f}s    "
+                f"{len(rows)} tracker(s)"))
+    out.append(("plain", ""))
 
     if not rows:
-        parts.append("<div class='banner warn'>No trackers were observed. "
-                     "Check SteamVR was running and trackers were powered "
-                     "on.</div></body></html>")
-        return "".join(parts)
+        emit("banner-warn", "No trackers were observed. Check SteamVR was "
+             "running and trackers were powered on.")
+        return out
 
     ranked = sorted(agg.items(), key=lambda kv: kv[1]["rf_loss_pct"],
                     reverse=True)
     worst_d, worst = ranked[0]
-    rf_word, rf_sev = rf_verdict(worst["rf_loss_pct"])
+    _, rf_sev = rf_verdict(worst["rf_loss_pct"])
 
-    # Overall conclusion banner
     if rf_sev == CRIT:
-        parts.append(f"<div class='banner crit'>RADIO PROBLEM: dongle "
-                     f"{worst_d} lost its radio link "
-                     f"{worst['rf_loss_pct']:.1f}% of the time "
-                     f"({worst['dropouts']} drops). The dongle, not the "
-                     f"lighthouses, is the bottleneck.</div>")
+        emit("banner-crit",
+             f"RADIO PROBLEM: dongle {worst_d} lost its radio link "
+             f"{worst['rf_loss_pct']:.1f}% of the time "
+             f"({worst['dropouts']} drops). The dongle, not the "
+             f"lighthouses, is the bottleneck.")
     elif rf_sev == WARN:
-        parts.append(f"<div class='banner warn'>Weak radio link on dongle "
-                     f"{worst_d} ({worst['rf_loss_pct']:.1f}% loss). Worth "
-                     f"checking its position.</div>")
+        emit("banner-warn",
+             f"Weak radio link on dongle {worst_d} "
+             f"({worst['rf_loss_pct']:.1f}% loss). Worth checking its "
+             f"position.")
     else:
         opt_bad = [r for r in rows if r["family"] == "optic"]
         if opt_bad:
             names = ", ".join(r["serial"] for r in opt_bad)
-            parts.append(f"<div class='banner warn'>Radio links healthy. "
-                         f"Lighthouse visibility issues on: {names}.</div>")
+            emit("banner-warn", f"Radio links healthy. Lighthouse "
+                 f"visibility issues on: {names}.")
         else:
-            parts.append("<div class='banner healthy'>All radio links and "
-                         "lighthouse visibility healthy.</div>")
+            emit("banner-healthy", "All radio links and lighthouse "
+                 "visibility healthy.")
 
-    # Per-dongle table
-    parts.append("<h2>Dongles (worst radio link first)</h2>")
-    parts.append("<p class='note'>Radio loss means the tracker could not "
-                 "reach this dongle. Lighthouse loss means trackers could "
-                 "not see the base stations (not a dongle problem).</p>")
-    parts.append("<table><tr><th>Dongle</th><th>Trackers</th>"
-                 "<th>Radio link</th><th>Radio drops</th><th>Stalls</th>"
-                 "<th>Lighthouse</th></tr>")
+    out.append(("plain", ""))
+    out.append(("h2", "DONGLES (worst radio link first)"))
+    emit("note", "Radio loss = tracker could not reach this dongle. "
+         "Lighthouse loss = tracker could not see the base stations "
+         "(not a dongle problem).")
+    out.append(("header", f"  {'dongle':<18}{'trackers':>9}  "
+                f"{'radio link':<22}{'radio drops':>11}{'stalls':>8}  "
+                f"{'lighthouse':<22}"))
     for dongle, a in ranked:
         rw, rs = rf_verdict(a["rf_loss_pct"])
-        ow, osev = optical_verdict(a["optical_loss_pct"])
-        parts.append(f"<tr><td><b>{dongle}</b></td>"
-                     f"<td class='num'>{a['count']}</td>"
-                     f"<td>{_vcell(rw, rs, a['rf_loss_pct'])}</td>"
-                     f"<td class='num'>{a['dropouts']}</td>"
-                     f"<td class='num'>{a['stalls']}</td>"
-                     f"<td>{_vcell(ow, osev, a['optical_loss_pct'])}</td></tr>")
-    parts.append("</table>")
+        ow, _ = optical_verdict(a["optical_loss_pct"])
+        radio = f"{rw}  {a['rf_loss_pct']:.2f}% lost"
+        optic = f"{ow}  {a['optical_loss_pct']:.2f}% lost"
+        out.append((f"row-{rs}",
+                    f"  {dongle:<18}{a['count']:>9}  {radio:<22}"
+                    f"{a['dropouts']:>11}{a['stalls']:>8}  {optic:<22}"))
 
-    # Recommendation
     if len(ranked) >= 2:
         best_d, best = ranked[-1]
         if worst["rf_loss_pct"] >= RF_LOSS_WARN and \
                 worst["rf_loss_pct"] >= 2 * max(best["rf_loss_pct"], 0.01):
             ratio = worst["rf_loss_pct"] / max(best["rf_loss_pct"], 0.01)
-            parts.append(f"<div class='advice'><b>Recommendation:</b> dongle "
-                         f"{worst_d} has {ratio:.1f}x the radio loss of the "
-                         f"best dongle ({best_d}). Check its position: raise "
-                         f"it 1.5-2 m on a USB extension, clear of the "
-                         f"floor, metal, USB 3.0 ports/cables and other "
-                         f"dongles, then run this monitor again to "
-                         f"compare.</div>")
+            out.append(("plain", ""))
+            emit("advice",
+                 f"RECOMMENDATION: dongle {worst_d} has {ratio:.1f}x the "
+                 f"radio loss of the best dongle ({best_d}). Check its "
+                 f"position: raise it 1.5-2 m on a USB extension, clear of "
+                 f"the floor, metal, USB 3.0 ports/cables and other "
+                 f"dongles, then run this monitor again to compare.")
 
-    # Per-tracker table
-    parts.append("<h2>Trackers</h2>")
-    parts.append("<table><tr><th>Tracker</th><th>Dongle</th>"
-                 "<th>Radio link</th><th>Radio drops</th>"
-                 "<th>Longest drop</th><th>Lighthouse</th>"
-                 "<th>Battery</th></tr>")
+    out.append(("plain", ""))
+    out.append(("h2", "TRACKERS (worst first)"))
+    out.append(("header", f"  {'tracker':<16}{'dongle':<18}"
+                f"{'radio link':<22}{'drops':>6}{'longest':>9}  "
+                f"{'lighthouse':<22}{'battery':>8}"))
     for r in sorted(rows, key=lambda r: (-r["rf_loss_pct"], r["serial"])):
-        rw, rs = rf_verdict(r["rf_loss_pct"])
-        ow, osev = optical_verdict(r["optical_loss_pct"])
+        rw, _ = rf_verdict(r["rf_loss_pct"])
+        ow, _ = optical_verdict(r["optical_loss_pct"])
         batt = f"{r['battery']:.0f}%" if r["battery"] is not None else "?"
-        parts.append(f"<tr><td><b>{r['serial']}</b></td>"
-                     f"<td>{r['dongle']}</td>"
-                     f"<td>{_vcell(rw, rs, r['rf_loss_pct'])}</td>"
-                     f"<td class='num'>{r['disconnect_events']}</td>"
-                     f"<td class='num'>{r['longest_disconnect_s']:.1f}s</td>"
-                     f"<td>{_vcell(ow, osev, r['optical_loss_pct'])}</td>"
-                     f"<td class='num'>{batt}</td></tr>")
-    parts.append("</table>")
+        radio = f"{rw}  {r['rf_loss_pct']:.2f}% lost"
+        optic = f"{ow}  {r['optical_loss_pct']:.2f}% lost"
+        out.append((f"row-{r['severity']}",
+                    f"  {r['serial']:<16}{r['dongle']:<18}{radio:<22}"
+                    f"{r['disconnect_events']:>6}"
+                    f"{r['longest_disconnect_s']:>8.1f}s  {optic:<22}"
+                    f"{batt:>8}"))
 
-    parts.append("<p class='files'>Raw data: the per-second CSV and the "
-                 "event log were saved in the same folder as this report. "
-                 "Generated by the Vive Tracker Link Monitor.</p>")
-    parts.append("</body></html>")
-    return "".join(parts)
+    out.append(("plain", ""))
+    emit("note", "Raw data: the per-second CSV and the event log were "
+         "saved in the same folder as this report.")
+    return out
+
+
+def build_report_text(site, snap, generated=None):
+    """Render the report as plain text (saved as the .txt report file)."""
+    rule = "=" * 78
+    lines = []
+    for tag, text in build_report_lines(site, snap, generated):
+        if tag == "title":
+            lines += [rule, " " + text, rule]
+        elif tag == "h2":
+            lines += [" " + text, " " + "-" * 76]
+        else:
+            lines.append((" " + text).rstrip())
+    return "\n".join(lines)
 
 
 class RFMonitor(threading.Thread):
@@ -524,14 +539,19 @@ class RFMonitor(threading.Thread):
         csv_path = os.path.join(self.log_dir, f"{safe}_{stamp}_series.csv")
         evt_path = os.path.join(self.log_dir, f"{safe}_{stamp}_events.log")
         self.report_path = os.path.join(self.log_dir,
-                                        f"{safe}_{stamp}_report.html")
+                                        f"{safe}_{stamp}_report.txt")
         self._csv_file = open(csv_path, "w", newline="", encoding="utf-8")
         self._csv_writer = csv.writer(self._csv_file)
+        # One row per tracker per interval. The *_1s columns are values for
+        # that interval only (what time-series tools like Grafana want);
+        # *_total columns are cumulative since the run started.
         self._csv_writer.writerow([
-            "timestamp", "site", "tracker", "model", "dongle",
-            "rf_loss_pct", "optical_loss_pct", "update_hz", "battery_pct",
-            "disconnect_events", "stall_events", "longest_disconnect_s",
+            "timestamp", "epoch_s", "site", "tracker", "model", "dongle",
             "connected",
+            "rf_down_pct_1s", "optical_oor_pct_1s", "drops_1s", "stalls_1s",
+            "rf_loss_pct_total", "optical_loss_pct_total",
+            "drops_total", "stalls_total", "longest_disconnect_s",
+            "update_hz", "battery_pct",
         ])
         self._event_file = open(evt_path, "w", encoding="utf-8")
         self._event_file.write(
@@ -541,18 +561,23 @@ class RFMonitor(threading.Thread):
         self.event_path = evt_path
 
     def _write_csv(self):
-        ts = datetime.now().isoformat()
+        now = datetime.now()
+        ts = now.isoformat()
+        epoch = f"{now.timestamp():.3f}"
         with self._lock:
-            rows = [st.to_row() for st in self.trackers.values()]
-        for r in rows:
+            pairs = [(st.to_row(), st.pop_window())
+                     for st in self.trackers.values()]
+        for r, w in pairs:
             self._csv_writer.writerow([
-                ts, self.site, r["serial"], r["model"], r["dongle"],
+                ts, epoch, self.site, r["serial"], r["model"], r["dongle"],
+                int(bool(r["connected"])),
+                f"{w['rf_down_pct']:.3f}", f"{w['oor_pct']:.3f}",
+                w["drops"], w["stalls"],
                 f"{r['rf_loss_pct']:.3f}", f"{r['optical_loss_pct']:.3f}",
-                f"{r['update_hz']:.1f}",
-                f"{r['battery']:.0f}" if r["battery"] is not None else "",
                 r["disconnect_events"], r["stall_events"],
                 f"{r['longest_disconnect_s']:.2f}",
-                int(bool(r["connected"])),
+                f"{r['update_hz']:.1f}",
+                f"{r['battery']:.0f}" if r["battery"] is not None else "",
             ])
         self._csv_file.flush()
 
@@ -561,16 +586,15 @@ class RFMonitor(threading.Thread):
         with self._lock:
             for st in self.trackers.values():
                 st.finalize(self.stopped_at)
-        verdict = self.verdict_text()
+        report = build_report_text(self.site, self.snapshot())
         if self._event_file:
-            self._event_file.write("\n" + verdict + "\n")
+            self._event_file.write("\n" + report + "\n")
             self._event_file.close()
         if self._csv_file:
             self._csv_file.close()
         if getattr(self, "report_path", None):
-            html = build_report_html(self.site, self.snapshot())
             with open(self.report_path, "w", encoding="utf-8") as f:
-                f.write(html)
+                f.write(report)
         try:
             if self._vr is not None:
                 openvr.shutdown()
@@ -606,59 +630,5 @@ class RFMonitor(threading.Thread):
         }
 
     def verdict_text(self):
-        snap = self.snapshot()
-        rows = snap["rows"]
-        elapsed = snap["elapsed"]
-        lines = ["=" * 78,
-                 f" SUMMARY   site: {self.site}   duration: {elapsed:.0f}s",
-                 "=" * 78]
-        if not rows:
-            lines.append(" No trackers were observed.")
-            return "\n".join(lines)
-
-        agg = snap["aggregates"]
-        ranked = sorted(agg.items(), key=lambda kv: kv[1]["rf_loss_pct"],
-                        reverse=True)
-        lines.append("")
-        lines.append(" Per-dongle radio health (worst first):")
-        lines.append(f"   {'dongle':<18}{'#trk':>5}{'RFloss%':>9}{'drops':>7}"
-                     f"{'stalls':>8}{'optic%':>8}")
-        for dongle, a in ranked:
-            lines.append(f"   {dongle:<18}{a['count']:>5}{a['rf_loss_pct']:>9.2f}"
-                         f"{a['dropouts']:>7}{a['stalls']:>8}"
-                         f"{a['optical_loss_pct']:>8.2f}")
-
-        if len(ranked) >= 2:
-            worst_d, worst = ranked[0]
-            best_d, best = ranked[-1]
-            lines.append("")
-            if worst["rf_loss_pct"] >= RF_LOSS_WARN and \
-                    worst["rf_loss_pct"] >= 2 * max(best["rf_loss_pct"], 0.01):
-                ratio = worst["rf_loss_pct"] / max(best["rf_loss_pct"], 0.01)
-                lines.append(f" Dongle {worst_d} shows {ratio:.1f}x the radio "
-                             f"loss of the best dongle ({best_d}).")
-                lines.append(" The radio link, not the base stations, is the "
-                             "bottleneck on that dongle.")
-                lines.append(" Recommended: raise the dongle 1.5-2m on a USB "
-                             "extension, clear of the floor,")
-                lines.append(" metal, USB 3.0 ports/cables and other dongles.")
-            else:
-                lines.append(" No single dongle stands out on radio loss; "
-                             "dropouts are evenly distributed.")
-
-        lines.append("")
-        lines.append(" Per-tracker classification:")
-        for r in sorted(rows, key=lambda r: (r["dongle"], r["serial"])):
-            lines.append(f"   {r['serial']:<16} dongle {r['dongle']:<16} "
-                         f"{r['label']:<24} rf={r['rf_loss_pct']:.2f}% "
-                         f"optic={r['optical_loss_pct']:.2f}% "
-                         f"drops={r['disconnect_events']} "
-                         f"stalls={r['stall_events']}")
-
-        rf_n = sum(1 for r in rows if r["family"] == "rf")
-        opt_n = sum(1 for r in rows if r["family"] == "optic")
-        lines.append("")
-        lines.append(f" Totals: {rf_n} tracker(s) with radio/dongle issues, "
-                     f"{opt_n} with lighthouse issues, "
-                     f"{len(rows) - rf_n - opt_n} healthy.")
-        return "\n".join(lines)
+        """Plain-text run report (same content as the saved report file)."""
+        return build_report_text(self.site, self.snapshot())

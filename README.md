@@ -48,7 +48,8 @@ RF, not to the lighthouses.
   to the radio side, never the lighthouse side.
 - **Legend** - explains the colours and the radio/lighthouse distinction.
 - **Event log** - timestamped link-loss events as they happen.
-- **Status bar** - elapsed time, tracker count, "Open reports folder".
+- **Status bar** - elapsed time, tracker count, "Open report" and
+  "Open reports folder" buttons.
 
 ![GUI preview](docs/gui_preview.png)
 
@@ -64,18 +65,32 @@ with CLI flags for scripted or timed runs.
 
 All files are written to a `logs\` folder created next to the executable.
 
-1. **HTML report** - `logs/<site>_<timestamp>_report.html`. Self-contained
-   and colour-coded; saved when monitoring stops. Open it with the GUI's
-   "Open report" button or by double-clicking the file. Contains a one-line
-   conclusion banner, the
-   per-dongle ranking (worst radio link first), a recommendation when one
-   dongle stands out, and a per-tracker table. This is the file to read
-   first; `docs/sample_report.html` shows an example.
-2. **CSV time series** - `logs/<site>_<timestamp>_series.csv`, one row per
-   tracker per second. For Excel or pandas.
-3. **Event log** - `logs/<site>_<timestamp>_events.log`, timestamped
-   link-loss events, with the text summary appended at the end.
-4. Live view (GUI or console) while running.
+1. **Summary window** - opens automatically in the app when monitoring is
+   stopped: a colour-coded conclusion banner, the per-dongle ranking (worst
+   radio link first), a recommendation when one dongle stands out, and a
+   per-tracker table.
+2. **Text report** - `logs/<site>_<timestamp>_report.txt`, the same content
+   as the summary window in plain text. Open it with the GUI's
+   "Open report" button or with any text editor;
+   `docs/sample_report.txt` shows an example.
+3. **CSV time series** - `logs/<site>_<timestamp>_series.csv`, one row per
+   tracker per second. For Excel, pandas or Grafana (see below).
+4. **Event log** - `logs/<site>_<timestamp>_events.log`, timestamped
+   link-loss events, with the text report appended at the end.
+
+### Importing into Grafana
+
+The CSV is designed to drop into Grafana (CSV or Infinity data source) so
+link health can be compared against other robot metrics:
+
+- Every row carries both an ISO-8601 `timestamp` and a numeric `epoch_s`
+  (Unix seconds) column.
+- `tracker` and `dongle` columns work as label/series dimensions.
+- The `*_1s` columns (`rf_down_pct_1s`, `optical_oor_pct_1s`, `drops_1s`,
+  `stalls_1s`) are per-interval values - graph these to see spikes and
+  correlate them with events elsewhere. `connected` is a 0/1 state flag.
+- The `*_total` columns are cumulative since the start of the run and suit
+  end-of-run comparisons rather than time-series panels.
 
 ## Build
 
@@ -181,6 +196,7 @@ the per-dongle ranking in the summary makes the comparison directly.
 | `run_from_source.bat`     | run from source on a development machine           |
 | `requirements.txt`        | `openvr` (runtime), `pyinstaller` (build)          |
 | `docs/gui_preview.png`    | screenshot used above                              |
+| `docs/sample_report.txt`  | example of the saved report                        |
 
 ## Notes
 

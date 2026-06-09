@@ -1,0 +1,33 @@
+==============================================================================
+ VIVE TRACKER LINK REPORT
+==============================================================================
+ Location: bay3-mixed    09 Jun 2026, 22:56    monitored for 300s    6 tracker(s)
+
+ RADIO PROBLEM: dongle D-FLOOR-7A21 lost its radio link 3.9% of the time (42
+ drops). The dongle, not the lighthouses, is the bottleneck.
+
+ DONGLES (worst radio link first)
+ ----------------------------------------------------------------------------
+ Radio loss = tracker could not reach this dongle. Lighthouse loss = tracker
+ could not see the base stations (not a dongle problem).
+   dongle             trackers  radio link            radio drops  stalls  lighthouse            
+   D-FLOOR-7A21              3  FAILING  3.91% lost            42      27  Good  0.40% lost      
+   D-MAST-3C04               3  Good  0.12% lost                0       0  Good  1.24% lost      
+
+ RECOMMENDATION: dongle D-FLOOR-7A21 has 33.5x the radio loss of the best
+ dongle (D-MAST-3C04). Check its position: raise it 1.5-2 m on a USB
+ extension, clear of the floor, metal, USB 3.0 ports/cables and other
+ dongles, then run this monitor again to compare.
+
+ TRACKERS (worst first)
+ ----------------------------------------------------------------------------
+   tracker         dongle            radio link             drops  longest  lighthouse             battery
+   LHB-2A41F0      D-FLOOR-7A21      FAILING  4.82% lost       17     3.2s  Good  0.30% lost           78%
+   LHB-7C0093      D-FLOOR-7A21      FAILING  3.95% lost       12     2.1s  Good  0.55% lost           64%
+   LHB-9912AB      D-FLOOR-7A21      FAILING  2.96% lost       13     1.4s  Good  0.35% lost           81%
+   LHB-5521DE      D-MAST-3C04       Good  0.14% lost           0     0.0s  Good  0.41% lost           88%
+   LHB-88AA10      D-MAST-3C04       Good  0.13% lost           0     0.0s  Marginal  3.10% lost       90%
+   LHB-1180CC      D-MAST-3C04       Good  0.08% lost           0     0.0s  Good  0.22% lost           92%
+
+ Raw data: the per-second CSV and the event log were saved in the same folder
+ as this report.
