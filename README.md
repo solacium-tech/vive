@@ -38,6 +38,42 @@ If the link is down we attribute it to RF, not to the lighthouses. And because
 we know each tracker's dongle serial, we aggregate dropouts **per dongle** and
 rank them — that ranking is the evidence.
 
+## The GUI
+
+There are two front-ends over the same engine — a **GUI** (`vive_dongle_gui.exe`,
+start here) and a **console** version (`vive_dongle_monitor.exe`, scriptable
+with CLI flags). The GUI groups trackers under the dongle they're paired to,
+colour-codes them by health (green/amber/red), and has an identification panel
+at the bottom:
+
+![GUI preview](docs/gui_preview.png)
+
+In the example above, the three trackers on `D-FLOOR-7A21` (the floor dongle)
+are red/amber with high RF loss and many dropouts, while the three on the
+elevated `D-MAST-3C04` are green — exactly the picture that proves a dongle
+placement problem rather than a lighthouse one.
+
+## Which tracker is dropping to which dongle (and finding it physically)
+
+Every tracker reports the serial of the dongle it's paired with
+(`Prop_ConnectedWirelessDongle_String`), so the tool always knows *which
+tracker is dropping and which dongle it belongs to* — that's the per-dongle
+grouping you see above.
+
+The dongles aren't physically labelled, though, so to map a **serial to a
+physical USB stick**, use the built-in identify workflow:
+
+1. Start the monitor (GUI or console).
+2. Physically unplug one dongle.
+3. Every tracker bound to it loses its link in the same instant, and the tool
+   prints an **IDENTIFY** line: *"Dongle `D-FLOOR-7A21` went DOWN (all 3
+   trackers lost link at once) — if you just unplugged a dongle, THIS is it.
+   Serves: …"*
+4. Label that stick, plug it back in, repeat for the next dongle.
+
+No extra drivers or USB libraries required — it works purely from the link-loss
+signal, so it's reliable behind the firewall.
+
 ## Outputs
 
 1. **Live console**, grouped by dongle, showing for each tracker: RF-down %,
@@ -62,23 +98,49 @@ SteamVR over local IPC.
 build_exe.bat
 ```
 
-This produces `dist\vive_dongle_monitor.exe`. Copy that one file to the SteamVR
-PC anywhere you like.
+This produces two standalone files in `dist\`:
+
+- `dist\vive_dongle_gui.exe` — the friendly window (start here).
+- `dist\vive_dongle_monitor.exe` — console version with CLI flags.
+
+Copy whichever you want to the SteamVR PC, anywhere you like.
 
 > Why a bundled `.exe`? `openvr`'s wheel already contains `openvr_api.dll`, and
 > PyInstaller's `--collect-all openvr` packs it in, so there is nothing to
 > download or install on the locked-down machine.
 
-## Run (on the SteamVR PC)
+## Run on the SteamVR (Windows) PC — step by step
 
-Start SteamVR and power on the trackers first, then:
+Your Google Drive → download → double-click plan is exactly right. The `.exe`
+**never reaches out to the internet** (it only talks to the local SteamVR
+process over local IPC), so the firewall won't block it.
+
+1. On a machine **with internet**, run `build_exe.bat` and grab
+   `dist\vive_dongle_gui.exe`.
+2. Upload that one file to Google Drive, then on the SteamVR PC download it
+   (e.g. to the Desktop).
+3. **Start SteamVR** and make sure your trackers are powered on and tracking
+   (the usual green icons).
+4. **Double-click `vive_dongle_gui.exe`.**
+   - Windows SmartScreen may show *"Windows protected your PC"* because the
+     `.exe` isn't code-signed. Click **More info → Run anyway**. (This is the
+     unsigned-binary warning, not a network/firewall block.)
+   - If Windows Firewall ever pops up asking about network access, you can
+     safely **Cancel/Deny** — the tool doesn't need the network.
+5. In the window, type a **Site** label (e.g. `bay3-floor`) and click
+   **▶ Start**. Trackers appear grouped under their dongles.
+6. Let it run while operators do a representative motion. To label dongles,
+   unplug one and watch the identification panel name it (see above).
+7. Click **■ Stop** to finish — a verdict window appears and a timestamped CSV
+   + event log are written to a `logs\` folder next to the `.exe`.
+
+Prefer a terminal? Use the console build instead:
 
 ```bat
 vive_dongle_monitor.exe --site "WarehouseA-bay3" --duration 300
 ```
 
-- `--site` labels the run (used in log filenames and the CSV) — use the site +
-  location so runs are comparable later.
+- `--site` labels the run (used in log filenames and the CSV).
 - `--duration` auto-stops after N seconds (0 = run until `Ctrl+C`).
 - `--log-dir` changes where logs go (default `logs\`).
 - `--no-log` for console-only.
@@ -139,10 +201,13 @@ one with 30+ robots:
 
 | File | Purpose |
 | --- | --- |
-| `vive_dongle_monitor.py` | the monitor (live view + CSV/event logs + verdict) |
-| `build_exe.bat` | build `dist\vive_dongle_monitor.exe` on an internet machine |
+| `vive_dongle_gui.py` | the GUI front-end (tkinter, stdlib) |
+| `vive_dongle_monitor.py` | the console front-end (CLI flags, scriptable) |
+| `vive_rf_core.py` | shared engine: OpenVR sampling, stats, logging, verdict |
+| `build_exe.bat` | build both `.exe`s on an internet machine |
 | `run_from_source.bat` | run from source on a dev/test PC |
 | `requirements.txt` | `openvr` (runtime) + `pyinstaller` (build) |
+| `docs/gui_preview.png` | screenshot used in this README |
 
 ## Notes & limitations
 

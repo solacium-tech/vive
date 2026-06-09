@@ -27,21 +27,34 @@ if errorlevel 1 (
     goto :end
 )
 
-echo [3/3] Building single-file executable with PyInstaller...
+echo [3/3] Building single-file executables with PyInstaller...
 REM --collect-all openvr ensures openvr_api.dll and bindings are bundled.
+REM Two outputs: a windowed GUI and a console version. Both are standalone.
+
+echo   - GUI build...
+pyinstaller --onefile --noconsole --name vive_dongle_gui ^
+    --collect-all openvr ^
+    vive_dongle_gui.py
+if errorlevel 1 (
+    echo ERROR: GUI build failed.
+    goto :end
+)
+
+echo   - Console build...
 pyinstaller --onefile --console --name vive_dongle_monitor ^
     --collect-all openvr ^
     vive_dongle_monitor.py
 if errorlevel 1 (
-    echo.
-    echo ERROR: PyInstaller build failed.
+    echo ERROR: console build failed.
     goto :end
 )
 
 echo.
 echo =====================================================================
-echo  DONE.  Your tool is: dist\vive_dongle_monitor.exe
-echo  Copy that single file to the firewalled SteamVR PC and run it.
+echo  DONE.  Your tools are in dist\ :
+echo    dist\vive_dongle_gui.exe       (friendly window - start here)
+echo    dist\vive_dongle_monitor.exe   (console + CLI flags, scriptable)
+echo  Copy whichever you want to the firewalled SteamVR PC and run it.
 echo =====================================================================
 
 :end
