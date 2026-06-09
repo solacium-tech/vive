@@ -33,13 +33,12 @@ BANNER_STYLE = {
 HEADER_BG = "#263238"
 
 COLUMNS = (
-    ("status",  "Status",            180, "w"),
-    ("radio",   "Radio loss",         90, "center"),
-    ("drops",   "Link drops",         90, "center"),
-    ("optic",   "Lighthouse loss",   110, "center"),
-    ("rate",    "Updates/sec",        90, "center"),
-    ("batt",    "Battery",            70, "center"),
-    ("link",    "Connected",          90, "center"),
+    ("radio",   "Radio link (to dongle)",        170, "w"),
+    ("drops",   "Link drops",                     80, "center"),
+    ("optic",   "Lighthouse (line of sight)",    170, "w"),
+    ("rate",    "Updates/sec",                    90, "center"),
+    ("batt",    "Battery",                        70, "center"),
+    ("link",    "Connected",                      90, "center"),
 )
 
 LEGEND = (
@@ -285,9 +284,13 @@ class MonitorApp:
     def _update_table(self, snap):
         for dongle in sorted(snap["by_dongle"]):
             a = snap["aggregates"][dongle]
+            rf_word, _ = core.rf_verdict(a["rf_loss_pct"])
+            op_word, _ = core.optical_verdict(a["optical_loss_pct"])
             d_text = f"Dongle {dongle}   ({a['count']} tracker(s))"
-            d_vals = ("", f"{a['rf_loss_pct']:.2f}%", a["dropouts"],
-                      f"{a['optical_loss_pct']:.2f}%", "", "", "")
+            d_vals = (f"{rf_word}  -  {a['rf_loss_pct']:.2f}% lost",
+                      a["dropouts"],
+                      f"{op_word}  -  {a['optical_loss_pct']:.2f}% lost",
+                      "", "", "")
             node = self._dongle_nodes.get(dongle)
             if node is None:
                 node = self.tree.insert("", "end", text=d_text, values=d_vals,
@@ -301,10 +304,11 @@ class MonitorApp:
                 iid = f"{dongle}/{r['serial']}"
                 batt = (f"{r['battery']:.0f}%" if r["battery"] is not None
                         else "?")
-                vals = (r["label"],
-                        f"{r['rf_loss_pct']:.2f}%",
+                rf_word, _ = core.rf_verdict(r["rf_loss_pct"])
+                op_word, _ = core.optical_verdict(r["optical_loss_pct"])
+                vals = (f"{rf_word}  -  {r['rf_loss_pct']:.2f}% lost",
                         r["disconnect_events"],
-                        f"{r['optical_loss_pct']:.2f}%",
+                        f"{op_word}  -  {r['optical_loss_pct']:.2f}% lost",
                         f"{r['update_hz']:.0f}",
                         batt,
                         "Yes" if r["connected"] else "NO")

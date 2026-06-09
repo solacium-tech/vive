@@ -40,8 +40,10 @@ RF, not to the lighthouses.
   now": green (all radio links healthy), amber (a dongle shows a weak link),
   red (a dongle is failing, named in the banner).
 - **Table** - trackers grouped under the dongle they are paired with,
-  colour-coded per row. Columns: Status, Radio loss, Link drops, Lighthouse
-  loss, Updates/sec, Battery, Connected.
+  colour-coded per row. Every row carries two independent verdicts side by
+  side, each with the percentage of time lost: "Radio link (to dongle)",
+  e.g. `FAILING - 4.82% lost`, and "Lighthouse (line of sight)", e.g.
+  `Good - 0.30% lost`, plus link drops, update rate, battery and connection.
 - **Legend** - explains the colours and the radio/lighthouse distinction.
 - **Event log** - timestamped link-loss events as they happen.
 - **Status bar** - elapsed time, tracker count, "Open reports folder".

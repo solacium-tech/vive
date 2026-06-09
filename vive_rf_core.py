@@ -55,6 +55,20 @@ def severity(value, warn, crit):
     return HEALTHY
 
 
+def rf_verdict(loss_pct):
+    """Per-domain radio verdict as (word, severity)."""
+    sev = severity(loss_pct, RF_LOSS_WARN, RF_LOSS_CRIT)
+    word = {HEALTHY: "Good", WARN: "Weak", CRIT: "FAILING"}[sev]
+    return word, sev
+
+
+def optical_verdict(loss_pct):
+    """Per-domain lighthouse verdict as (word, severity)."""
+    sev = severity(loss_pct, OPTICAL_WARN, OPTICAL_CRIT)
+    word = {HEALTHY: "Good", WARN: "Marginal", CRIT: "BLOCKED"}[sev]
+    return word, sev
+
+
 class TrackerStat:
     """Accumulated link statistics for one tracked device."""
 
