@@ -1,0 +1,7 @@
+# Runtime dependency for the Vive dongle monitor.
+# openvr ships the openvr_api.dll inside the wheel, so no separate SDK install
+# is needed. Everything else the tool uses is Python standard library.
+openvr>=1.23.7
+
+# Build-time only (for producing the standalone .exe):
+pyinstaller>=6.0

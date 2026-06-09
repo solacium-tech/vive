@@ -1,0 +1,11 @@
+# Diagnostic output
+logs/
+*.csv
+
+# PyInstaller / build
+build/
+dist/
+*.spec
+.build_venv/
+__pycache__/
+*.pyc
