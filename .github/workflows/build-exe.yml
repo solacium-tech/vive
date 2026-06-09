@@ -1,0 +1,42 @@
+name: Build Windows executables
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["**"]
+    paths:
+      - "*.py"
+      - "requirements.txt"
+      - ".github/workflows/build-exe.yml"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build GUI executable
+        run: >
+          pyinstaller --onefile --noconsole --name vive_dongle_gui
+          --collect-all openvr vive_dongle_gui.py
+
+      - name: Build console executable
+        run: >
+          pyinstaller --onefile --console --name vive_dongle_monitor
+          --collect-all openvr vive_dongle_monitor.py
+
+      - name: Upload executables
+        uses: actions/upload-artifact@v4
+        with:
+          name: vive-link-monitor-windows
+          path: dist/*.exe
+          retention-days: 30

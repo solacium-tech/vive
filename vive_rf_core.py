@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
-"""
-Shared core for the Vive dongle / RF diagnostic tools.
+"""Core sampling engine for the Vive tracker RF diagnostics tools.
 
-Holds the OpenVR sampling logic, per-tracker statistics, per-dongle
-aggregation, CSV/event logging, and the "identify dongle by unplugging it"
-detector. Both the console tool (vive_dongle_monitor.py) and the GUI
-(vive_dongle_gui.py) import from here so they always agree.
+Polls SteamVR (via pyopenvr) on a background thread and maintains per-tracker
+and per-dongle link statistics. Two failure modes are tracked separately:
 
-Key idea
---------
-Each tracker reports the serial of the dongle it is paired with via
-Prop_ConnectedWirelessDongle_String, so we always know *which dongle a
-dropping tracker belongs to*. The dongles are not physically labelled, so
-RFMonitor also watches for whole-dongle disconnects (every tracker on a
-dongle losing bDeviceIsConnected in the same instant) which is exactly what
-happens when you unplug that dongle - letting you label them physically.
+  - radio:   pose.bDeviceIsConnected false, or input packet counter stalls
+             (problem between tracker and its USB dongle)
+  - optical: connected but TrackingResult_Running_OutOfRange
+             (problem between tracker and the base stations)
+
+Optical loss is only accumulated while the radio link is up, so the two
+figures never overlap. Each tracker is mapped to its paired dongle through
+Prop_ConnectedWirelessDongle_String, which allows per-dongle aggregation.
+
+Front-ends: vive_dongle_monitor.py (console), vive_dongle_gui.py (GUI).
 """
 
 import csv
@@ -26,25 +25,23 @@ from datetime import datetime
 
 try:
     import openvr
-except ImportError:  # pragma: no cover - openvr only present at runtime
+except ImportError:
     openvr = None
 
 
-# --------------------------------------------------------------------------- #
-# Tunables                                                                     #
-# --------------------------------------------------------------------------- #
-POLL_HZ = 250            # how often the sampling thread reads poses
-CSV_PERIOD_S = 1.0       # how often a CSV time-series row is appended
-BATTERY_PERIOD_S = 5.0   # battery telemetry changes slowly
-STALL_MS = 60            # connected but no new packet for this long = "stall"
+# Sampling configuration
+POLL_HZ = 250
+CSV_PERIOD_S = 1.0
+BATTERY_PERIOD_S = 5.0
+STALL_MS = 60               # connected but no new input packet -> stall
 
-# Verdict thresholds (percent).
-RF_LOSS_WARN = 0.5       # % of samples with the radio link DOWN
+# Classification thresholds (percent)
+RF_LOSS_WARN = 0.5
 RF_LOSS_CRIT = 2.0
-OPTICAL_WARN = 2.0       # % of connected samples out of lighthouse range
+OPTICAL_WARN = 2.0
 OPTICAL_CRIT = 8.0
 
-# Severity keys returned by classify()/severity() - tools map these to colours.
+# Severity keys used by both front-ends
 HEALTHY = "healthy"
 WARN = "warn"
 CRIT = "crit"
@@ -58,23 +55,9 @@ def severity(value, warn, crit):
     return HEALTHY
 
 
-def tracking_result_name(tr):
-    if openvr is None:
-        return str(tr)
-    names = {
-        openvr.TrackingResult_Uninitialized: "Uninitialized",
-        openvr.TrackingResult_Calibrating_InProgress: "Calibrating",
-        openvr.TrackingResult_Calibrating_OutOfRange: "CalibOutOfRange",
-        openvr.TrackingResult_Running_OK: "OK",
-        openvr.TrackingResult_Running_OutOfRange: "OutOfRange",
-    }
-    return names.get(tr, str(tr))
-
-
-# --------------------------------------------------------------------------- #
-# Per-tracker statistics                                                       #
-# --------------------------------------------------------------------------- #
 class TrackerStat:
+    """Accumulated link statistics for one tracked device."""
+
     def __init__(self, serial, model, dongle):
         self.serial = serial
         self.model = model
@@ -84,17 +67,17 @@ class TrackerStat:
         self.samples = 0
         self.connected_samples = 0
         self.pose_valid_samples = 0
-        self.out_of_range_samples = 0   # connected but optically out of range
-        self.rf_loss_samples = 0        # radio link down
+        self.out_of_range_samples = 0
+        self.rf_loss_samples = 0
 
-        # Radio-starvation (input packet continuity) detector.
+        # input packet continuity
         self.last_packet = None
         self.last_packet_time = None
         self.packet_increments = 0
         self.stall_events = 0
         self._in_stall = False
 
-        # Hard connect/disconnect (timestamped) tracking.
+        # connect/disconnect edges
         self.was_connected = True
         self.disconnect_events = 0
         self.in_disconnect = False
@@ -103,11 +86,10 @@ class TrackerStat:
         self.longest_disconnect_s = 0.0
         self.connected_elapsed_s = 0.0
 
-        self.last_connected = True       # for whole-dongle unplug detection
         self.first_seen = time.time()
 
     def update(self, pose, packet_num, now, dt):
-        """Fold one sample in. Returns True on a connected->disconnected edge."""
+        """Fold in one sample. Returns True on a connected->down edge."""
         self.samples += 1
         connected = bool(pose.bDeviceIsConnected)
         dropped_edge = False
@@ -150,7 +132,6 @@ class TrackerStat:
             self.in_disconnect = False
             self.disconnect_start = None
         self.was_connected = connected
-        self.last_connected = connected
         return dropped_edge
 
     def finalize(self, now):
@@ -174,18 +155,18 @@ class TrackerStat:
                 if self.connected_elapsed_s > 0.2 else 0.0)
 
     def classify(self):
-        """Return (label, severity_key, family) for the dominant problem."""
+        """Return (label, severity, family) for the dominant problem."""
         rf = self.rf_loss_pct
         opt = self.optical_loss_pct
         if rf >= RF_LOSS_CRIT:
-            return "RF / DONGLE FAILURE", CRIT, "rf"
+            return "Radio failing (dongle)", CRIT, "rf"
         if rf >= RF_LOSS_WARN or self.stall_events > 0:
-            return "RF / DONGLE WEAK", WARN, "rf"
+            return "Radio weak (dongle)", WARN, "rf"
         if opt >= OPTICAL_CRIT:
-            return "LIGHTHOUSE BLOCKED", CRIT, "optic"
+            return "Lighthouse blocked", CRIT, "optic"
         if opt >= OPTICAL_WARN:
-            return "LIGHTHOUSE MARGINAL", WARN, "optic"
-        return "HEALTHY", HEALTHY, "ok"
+            return "Lighthouse marginal", WARN, "optic"
+        return "Healthy", HEALTHY, "ok"
 
     def to_row(self):
         label, sev, family = self.classify()
@@ -207,9 +188,6 @@ class TrackerStat:
         }
 
 
-# --------------------------------------------------------------------------- #
-# Defensive property reads                                                     #
-# --------------------------------------------------------------------------- #
 def _get_str(vr, idx, prop):
     try:
         return vr.getStringTrackedDeviceProperty(idx, prop)
@@ -229,14 +207,8 @@ def _is_tracked_class(cls):
                    openvr.TrackedDeviceClass_Controller)
 
 
-# --------------------------------------------------------------------------- #
-# The monitor (runs OpenVR sampling on its own thread)                         #
-# --------------------------------------------------------------------------- #
 class RFMonitor(threading.Thread):
-    """
-    Samples SteamVR on a background thread. Consumers (console loop or GUI
-    timer) call snapshot() to read a thread-safe copy and drain notifications.
-    """
+    """Background sampler. Consumers call snapshot() for a thread-safe view."""
 
     def __init__(self, site="site", log_dir="logs", enable_log=True):
         super().__init__(daemon=True)
@@ -249,8 +221,8 @@ class RFMonitor(threading.Thread):
         self.ready = threading.Event()
         self.error = None
 
-        self.trackers = {}            # serial -> TrackerStat
-        self.index_serial = {}        # device index -> serial
+        self.trackers = {}        # serial -> TrackerStat
+        self.index_serial = {}    # device index -> serial
         self.notifications = deque(maxlen=200)
         self.started_at = None
         self.stopped_at = None
@@ -260,20 +232,16 @@ class RFMonitor(threading.Thread):
         self._csv_writer = None
         self._event_file = None
 
-    # -- logging helpers ---------------------------------------------------- #
     def _log_event(self, msg):
-        line = f"{datetime.now().isoformat()}  {msg}"
         if self._event_file:
-            self._event_file.write(line + "\n")
+            self._event_file.write(f"{datetime.now().isoformat()}  {msg}\n")
             self._event_file.flush()
 
     def _notify(self, kind, msg):
-        """Queue a user-facing notification (also written to the event log)."""
         with self._lock:
             self.notifications.append((datetime.now(), kind, msg))
         self._log_event(f"{kind.upper()}  {msg}")
 
-    # -- lifecycle ---------------------------------------------------------- #
     def stop(self):
         self._stop.set()
 
@@ -285,8 +253,8 @@ class RFMonitor(threading.Thread):
         try:
             self._vr = openvr.init(openvr.VRApplication_Background)
         except Exception:
-            self.error = ("Cannot connect to SteamVR. Is it running, with the "
-                          "trackers powered on and paired?")
+            self.error = ("Cannot connect to SteamVR. Check that SteamVR is "
+                          "running and the trackers are powered on and paired.")
             self.ready.set()
             return
 
@@ -307,18 +275,18 @@ class RFMonitor(threading.Thread):
                 prev = now
 
                 self._drain_vr_events(event, now)
-                self._sample(now, dt, last_battery, read_batt=(now - last_battery) >= BATTERY_PERIOD_S)
-                if (now - last_battery) >= BATTERY_PERIOD_S:
+                read_batt = (now - last_battery) >= BATTERY_PERIOD_S
+                self._sample(now, dt, read_batt)
+                if read_batt:
                     last_battery = now
                 if self._csv_writer and (now - last_csv) >= CSV_PERIOD_S:
                     last_csv = now
-                    self._write_csv(now)
+                    self._write_csv()
 
                 time.sleep(poll_dt)
         finally:
             self._finish()
 
-    # -- per-poll work ------------------------------------------------------ #
     def _drain_vr_events(self, event, now):
         while self._vr.pollNextEvent(event):
             idx = event.trackedDeviceIndex
@@ -352,12 +320,12 @@ class RFMonitor(threading.Thread):
                             f"dongle={dongle or 'UNKNOWN'}")
         return st
 
-    def _sample(self, now, dt, last_battery, read_batt):
+    def _sample(self, now, dt, read_batt):
         poses = self._vr.getDeviceToAbsoluteTrackingPose(
             openvr.TrackingUniverseRawAndUncalibrated, 0,
             openvr.k_unMaxTrackedDeviceCount)
 
-        dropped_by_dongle = defaultdict(list)   # dongle -> [serials that dropped]
+        dropped_by_dongle = defaultdict(list)
         with self._lock:
             for idx in range(openvr.k_unMaxTrackedDeviceCount):
                 st = self._ensure_tracker(idx, now)
@@ -368,8 +336,7 @@ class RFMonitor(threading.Thread):
                 if ok:
                     packet_num = state.unPacketNum
 
-                edge = st.update(poses[idx], packet_num, now, dt)
-                if edge:
+                if st.update(poses[idx], packet_num, now, dt):
                     dropped_by_dongle[st.dongle].append(st.serial)
 
                 if read_batt:
@@ -378,7 +345,6 @@ class RFMonitor(threading.Thread):
                     if b is not None:
                         st.battery = b * 100.0
 
-            # Whole-dongle drop = likely physical unplug -> identify aid.
             dongle_members = defaultdict(list)
             for st in self.trackers.values():
                 dongle_members[st.dongle].append(st)
@@ -387,16 +353,15 @@ class RFMonitor(threading.Thread):
             members = dongle_members.get(dongle, [])
             all_down = members and all(not m.was_connected for m in members)
             tlist = ", ".join(sorted(dropped))
-            if all_down and len(members) >= 1:
-                self._notify("identify",
-                             f"Dongle {dongle} went DOWN (all {len(members)} "
-                             f"tracker(s) lost link at once) - if you just "
-                             f"unplugged a dongle, THIS is it. Serves: {tlist}")
+            if all_down and len(members) > 1:
+                self._notify("alert",
+                             f"All {len(members)} trackers on dongle {dongle} "
+                             f"lost their radio link at the same time")
             else:
-                self._notify("dropout",
-                             f"RF dropout on dongle {dongle}: tracker(s) {tlist}")
+                self._notify("alert",
+                             f"Radio link lost: tracker {tlist} "
+                             f"(dongle {dongle})")
 
-    # -- CSV ---------------------------------------------------------------- #
     def _open_logs(self):
         if not self.enable_log:
             return
@@ -415,12 +380,12 @@ class RFMonitor(threading.Thread):
         ])
         self._event_file = open(evt_path, "w", encoding="utf-8")
         self._event_file.write(
-            f"# Vive dongle monitor event log  site={self.site}  "
+            f"# RF diagnostics event log  site={self.site}  "
             f"started={datetime.now().isoformat()}\n")
         self.csv_path = csv_path
         self.event_path = evt_path
 
-    def _write_csv(self, now):
+    def _write_csv(self):
         ts = datetime.now().isoformat()
         with self._lock:
             rows = [st.to_row() for st in self.trackers.values()]
@@ -453,9 +418,8 @@ class RFMonitor(threading.Thread):
         except Exception:
             pass
 
-    # -- snapshot for consumers -------------------------------------------- #
     def snapshot(self):
-        """Thread-safe view: rows, per-dongle aggregation, drained notifications."""
+        """Thread-safe copy of current stats plus drained notifications."""
         with self._lock:
             rows = [st.to_row() for st in self.trackers.values()]
             notes = list(self.notifications)
@@ -482,13 +446,12 @@ class RFMonitor(threading.Thread):
             "elapsed": elapsed,
         }
 
-    # -- verdict ------------------------------------------------------------ #
     def verdict_text(self):
         snap = self.snapshot()
         rows = snap["rows"]
         elapsed = snap["elapsed"]
         lines = ["=" * 78,
-                 f" VERDICT   site: {self.site}   duration: {elapsed:.0f}s",
+                 f" SUMMARY   site: {self.site}   duration: {elapsed:.0f}s",
                  "=" * 78]
         if not rows:
             lines.append(" No trackers were observed.")
@@ -498,7 +461,7 @@ class RFMonitor(threading.Thread):
         ranked = sorted(agg.items(), key=lambda kv: kv[1]["rf_loss_pct"],
                         reverse=True)
         lines.append("")
-        lines.append(" Per-dongle RF health (worst first):")
+        lines.append(" Per-dongle radio health (worst first):")
         lines.append(f"   {'dongle':<18}{'#trk':>5}{'RFloss%':>9}{'drops':>7}"
                      f"{'stalls':>8}{'optic%':>8}")
         for dongle, a in ranked:
@@ -513,22 +476,22 @@ class RFMonitor(threading.Thread):
             if worst["rf_loss_pct"] >= RF_LOSS_WARN and \
                     worst["rf_loss_pct"] >= 2 * max(best["rf_loss_pct"], 0.01):
                 ratio = worst["rf_loss_pct"] / max(best["rf_loss_pct"], 0.01)
-                lines.append(f" >> Dongle {worst_d} has {ratio:.1f}x the RF loss "
-                             f"of the best dongle ({best_d}).")
-                lines.append("    The radio link, not the lighthouses, is the "
+                lines.append(f" Dongle {worst_d} shows {ratio:.1f}x the radio "
+                             f"loss of the best dongle ({best_d}).")
+                lines.append(" The radio link, not the base stations, is the "
                              "bottleneck on that dongle.")
-                lines.append("    Elevate it ~1.5-2m on a USB extension, away "
-                             "from the floor, metal,")
-                lines.append("    USB3 ports/cables and other dongles.")
+                lines.append(" Recommended: raise the dongle 1.5-2m on a USB "
+                             "extension, clear of the floor,")
+                lines.append(" metal, USB 3.0 ports/cables and other dongles.")
             else:
-                lines.append(" >> No single dongle stands out on RF loss; "
-                             "dropouts look evenly distributed.")
+                lines.append(" No single dongle stands out on radio loss; "
+                             "dropouts are evenly distributed.")
 
         lines.append("")
         lines.append(" Per-tracker classification:")
         for r in sorted(rows, key=lambda r: (r["dongle"], r["serial"])):
             lines.append(f"   {r['serial']:<16} dongle {r['dongle']:<16} "
-                         f"{r['label']:<22} rf={r['rf_loss_pct']:.2f}% "
+                         f"{r['label']:<24} rf={r['rf_loss_pct']:.2f}% "
                          f"optic={r['optical_loss_pct']:.2f}% "
                          f"drops={r['disconnect_events']} "
                          f"stalls={r['stall_events']}")
@@ -536,7 +499,7 @@ class RFMonitor(threading.Thread):
         rf_n = sum(1 for r in rows if r["family"] == "rf")
         opt_n = sum(1 for r in rows if r["family"] == "optic")
         lines.append("")
-        lines.append(f" Summary: {rf_n} tracker(s) with RF/dongle issues, "
+        lines.append(f" Totals: {rf_n} tracker(s) with radio/dongle issues, "
                      f"{opt_n} with lighthouse issues, "
                      f"{len(rows) - rf_n - opt_n} healthy.")
         return "\n".join(lines)

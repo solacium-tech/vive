@@ -1,26 +1,14 @@
 #!/usr/bin/env python3
-"""
-Vive Tracker Dongle / RF Diagnostic Monitor (console)
-=====================================================
+"""Console front-end for the Vive tracker RF diagnostics engine.
 
-Isolates RADIO / DONGLE failures from OPTICAL / LIGHTHOUSE failures and
-attributes every dropout to the specific dongle a tracker is paired with.
-See README.md for the full method. This file is the console front-end; the
-sampling logic lives in vive_rf_core.py (shared with the GUI).
-
-Dongle identification
----------------------
-Dongles are not physically labelled. With the monitor running, unplug one
-dongle: every tracker bound to it loses its link at the same instant and the
-tool prints an "IDENTIFY" line naming that dongle's serial and the trackers it
-serves. Label that stick, plug it back, repeat.
-
-Runtime: SteamVR running + trackers on. No internet needed (talks to SteamVR
-over local IPC). Build the .exe off-site with build_exe.bat.
+Displays per-tracker and per-dongle link statistics, separating radio
+(dongle) problems from optical (lighthouse) problems. Sampling lives in
+vive_rf_core; see README.md for the method and field descriptions.
 
 Usage:
   vive_dongle_monitor.exe --site "WarehouseA-bay3" --duration 300
-  Ctrl+C stops early and still writes the summary.
+
+Ctrl+C stops early; the summary and log files are still written.
 """
 
 import argparse
@@ -30,10 +18,13 @@ import time
 
 import vive_rf_core as core
 
-
-# --- console colour mapping ------------------------------------------------ #
-RESET = "\033[0m"; DIM = "\033[2m"; BOLD = "\033[1m"
-GREEN = "\033[32m"; YELLOW = "\033[33m"; RED = "\033[31m"; CYAN = "\033[36m"
+RESET = "\033[0m"
+DIM = "\033[2m"
+BOLD = "\033[1m"
+GREEN = "\033[32m"
+YELLOW = "\033[33m"
+RED = "\033[31m"
+CYAN = "\033[36m"
 CLEAR = "\033[H\033[J"
 SEV_COLOUR = {core.HEALTHY: GREEN, core.WARN: YELLOW, core.CRIT: RED}
 
@@ -43,6 +34,7 @@ def c(text, code):
 
 
 def enable_ansi():
+    """Enable VT escape processing on Windows consoles."""
     if os.name != "nt":
         return
     try:
@@ -58,11 +50,11 @@ def enable_ansi():
 
 def render(snap, site, recent_notes):
     out = [CLEAR, c("=" * 78, CYAN),
-           c(f" VIVE DONGLE / RF DIAGNOSTIC   site: {site}   "
+           c(f" VIVE TRACKER LINK MONITOR   site: {site}   "
              f"elapsed: {snap['elapsed']:6.0f}s", BOLD),
            c("=" * 78, CYAN),
            f"{DIM} Radio (dongle) loss vs optical (lighthouse) loss.  "
-           f"Unplug a dongle to identify it.  Ctrl+C to stop.{RESET}", ""]
+           f"Ctrl+C to stop.{RESET}", ""]
 
     if not snap["rows"]:
         out.append(c("  Waiting for trackers... (power them on)", YELLOW))
@@ -73,21 +65,21 @@ def render(snap, site, recent_notes):
     for dongle in sorted(snap["by_dongle"]):
         a = snap["aggregates"][dongle]
         out.append(c(f" DONGLE {dongle}   [{a['count']} tracker(s)]  "
-                     f"avg RF loss {a['rf_loss_pct']:5.2f}%   "
+                     f"avg radio loss {a['rf_loss_pct']:5.2f}%   "
                      f"dropouts {a['dropouts']}", BOLD))
         for r in sorted(snap["by_dongle"][dongle], key=lambda r: r["serial"]):
             col = SEV_COLOUR[r["severity"]]
             serial = r["serial"]
             label = r["label"]
             batt = f"{r['battery']:3.0f}%" if r["battery"] is not None else "  ?"
-            rf_col = SEV_COLOUR[core.severity(r["rf_loss_pct"],
-                                              core.RF_LOSS_WARN, core.RF_LOSS_CRIT)]
-            op_col = SEV_COLOUR[core.severity(r["optical_loss_pct"],
-                                              core.OPTICAL_WARN, core.OPTICAL_CRIT)]
+            rf_col = SEV_COLOUR[core.severity(
+                r["rf_loss_pct"], core.RF_LOSS_WARN, core.RF_LOSS_CRIT)]
+            op_col = SEV_COLOUR[core.severity(
+                r["optical_loss_pct"], core.OPTICAL_WARN, core.OPTICAL_CRIT)]
             link = "UP " if r["connected"] else "DOWN"
             rf_txt = c("loss " + f"{r['rf_loss_pct']:5.2f}%", rf_col)
-            op_txt = c("OOR  " + f"{r['optical_loss_pct']:5.2f}%", op_col)
-            out.append(f"  {serial:<16} {c(f'{label:<20}', col)} link {link}")
+            op_txt = c("loss " + f"{r['optical_loss_pct']:5.2f}%", op_col)
+            out.append(f"  {serial:<16} {c(f'{label:<24}', col)} link {link}")
             out.append(f"    radio: {rf_txt}"
                        f"  dropouts {r['disconnect_events']:<3} "
                        f"stalls {r['stall_events']:<3} "
@@ -97,17 +89,16 @@ def render(snap, site, recent_notes):
         out.append("")
 
     if recent_notes:
-        out.append(c(" Recent dongle events (newest last):", BOLD))
+        out.append(c(" Recent events (newest last):", BOLD))
         for ts, kind, msg in recent_notes[-6:]:
-            col = CYAN if kind == "identify" else YELLOW
-            out.append(c(f"   {ts.strftime('%H:%M:%S')} {msg}", col))
+            out.append(c(f"   {ts.strftime('%H:%M:%S')} {msg}", YELLOW))
     sys.stdout.write("\n".join(out) + "\n")
     sys.stdout.flush()
 
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Vive tracker dongle / RF diagnostic monitor (console)")
+        description="Vive tracker dongle/lighthouse link monitor (console)")
     ap.add_argument("--site", default="site",
                     help="label for this run, used in log filenames + CSV")
     ap.add_argument("--log-dir", default="logs", help="directory for logs")
