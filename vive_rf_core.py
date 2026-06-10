@@ -87,10 +87,13 @@ class TrackerStat:
         self.out_of_range_samples = 0
         self.rf_loss_samples = 0
 
-        # input packet continuity
+        # input packet continuity. Some trackers never advance the input
+        # packet counter (no buttons), so we only use it for stall/rate
+        # detection on devices where it is actually seen to advance.
         self.last_packet = None
         self.last_packet_time = None
         self.packet_increments = 0
+        self.packet_ever_advanced = False
         self.stall_events = 0
         self._in_stall = False
 
@@ -118,6 +121,9 @@ class TrackerStat:
 
         self.first_seen = time.time()
 
+    def label_or_serial(self):
+        return f"{self.name} ({self.serial})" if self.name else self.serial
+
     def _mark_issue(self, now, kind):
         if self.first_issue_time is None:
             self.first_issue_time = now
@@ -125,11 +131,11 @@ class TrackerStat:
         self.last_issue_time = now
 
     def update(self, pose, packet_num, now, dt):
-        """Fold in one sample. Returns True on a connected->down edge."""
+        """Fold in one sample. Returns 'drop'/'reconnect'/None for the edge."""
         self.samples += 1
         self.win_samples += 1
         connected = bool(pose.bDeviceIsConnected)
-        dropped_edge = False
+        edge = None
 
         if connected:
             self.connected_samples += 1
@@ -147,12 +153,16 @@ class TrackerStat:
                     self.last_packet_time = now
                 elif packet_num != self.last_packet:
                     self.packet_increments += 1
+                    self.packet_ever_advanced = True
                     self.last_packet = packet_num
                     self.last_packet_time = now
                     self._in_stall = False
-                elif (self.last_packet_time is not None
+                elif (self.packet_ever_advanced
+                      and self.last_packet_time is not None
                       and (now - self.last_packet_time) * 1000.0 > STALL_MS
                       and not self._in_stall):
+                    # Only meaningful for devices that DO stream a packet
+                    # counter; otherwise a static counter is normal, not a fault.
                     self.stall_events += 1
                     self.win_stalls += 1
                     self._in_stall = True
@@ -166,7 +176,7 @@ class TrackerStat:
             self.disconnect_start = now
             self.disconnect_events += 1
             self.win_drops += 1
-            dropped_edge = True
+            edge = "drop"
             self._mark_issue(now, "drop")
         elif connected and not self.was_connected:
             if self.disconnect_start is not None:
@@ -175,8 +185,9 @@ class TrackerStat:
                 self.longest_disconnect_s = max(self.longest_disconnect_s, dur)
             self.in_disconnect = False
             self.disconnect_start = None
+            edge = "reconnect"
         self.was_connected = connected
-        return dropped_edge
+        return edge
 
     def finalize(self, now):
         if self.in_disconnect and self.disconnect_start is not None:
@@ -195,8 +206,10 @@ class TrackerStat:
 
     @property
     def update_hz(self):
-        return (self.packet_increments / self.connected_elapsed_s
-                if self.connected_elapsed_s > 0.2 else 0.0)
+        # Unknown if the device never advances its packet counter.
+        if not self.packet_ever_advanced or self.connected_elapsed_s <= 0.2:
+            return None
+        return self.packet_increments / self.connected_elapsed_s
 
     def classify(self):
         """Return (label, severity, family) for the dominant problem."""
@@ -660,13 +673,17 @@ class RFMonitor(threading.Thread):
             updates.append((idx, packet_num, battery))
 
         dropped_by_dongle = defaultdict(list)
+        reconnected = []
         with self._lock:
             for idx, packet_num, battery in updates:
                 st = self._ensure_tracker(idx, now)
                 if st is None:
                     continue
-                if st.update(poses[idx], packet_num, now, dt):
+                edge = st.update(poses[idx], packet_num, now, dt)
+                if edge == "drop":
                     dropped_by_dongle[st.dongle].append(st.serial)
+                elif edge == "reconnect":
+                    reconnected.append((st.label_or_serial(), st.dongle))
                 if battery is not None:
                     st.battery = battery
 
@@ -691,18 +708,25 @@ class RFMonitor(threading.Thread):
                 write_tracker_names_template(
                     self.names_path, sorted(self.trackers), self.names)
 
+        name_of = {st.serial: st.label_or_serial()
+                   for st in self.trackers.values()}
         for dongle, dropped in dropped_by_dongle.items():
             members = dongle_members.get(dongle, [])
             all_down = members and all(not m.was_connected for m in members)
-            tlist = ", ".join(sorted(dropped))
+            tlist = ", ".join(name_of.get(s, s) for s in sorted(dropped))
             if all_down and len(members) > 1:
                 self._notify("alert",
-                             f"All {len(members)} trackers on dongle {dongle} "
-                             f"lost their radio link at the same time")
+                             f"DROP: all {len(members)} trackers on dongle "
+                             f"{dongle} lost their radio link at the same time "
+                             f"({tlist})")
             else:
                 self._notify("alert",
-                             f"Radio link lost: tracker {tlist} "
+                             f"DROP: radio link lost - {tlist} "
                              f"(dongle {dongle})")
+        for label, dongle in reconnected:
+            self._notify("info",
+                         f"RECONNECTED: radio link restored - {label} "
+                         f"(dongle {dongle})")
 
     def _open_logs(self):
         if not self.enable_log:
@@ -750,7 +774,7 @@ class RFMonitor(threading.Thread):
                 f"{r['rf_loss_pct']:.3f}", f"{r['optical_loss_pct']:.3f}",
                 r["disconnect_events"], r["stall_events"],
                 f"{r['longest_disconnect_s']:.2f}",
-                f"{r['update_hz']:.1f}",
+                f"{r['update_hz']:.1f}" if r["update_hz"] is not None else "",
                 f"{r['battery']:.0f}" if r["battery"] is not None else "",
             ])
         self._csv_file.flush()

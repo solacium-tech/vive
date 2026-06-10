@@ -75,8 +75,11 @@ All files are written to a `logs\` folder created next to the executable.
    `docs/sample_report.txt` shows an example.
 3. **CSV time series** - `logs/<site>_<timestamp>_series.csv`, one row per
    tracker per second. For Excel, pandas or Grafana (see below).
-4. **Event log** - `logs/<site>_<timestamp>_events.log`, timestamped
-   link-loss events, with the text report appended at the end.
+4. **Event log** - `logs/<site>_<timestamp>_events.log`. Every radio drop
+   (`DROP:`) and recovery (`RECONNECTED:`) is written here with a full
+   timestamp and the tracker/dongle involved, so it doubles as a timeline of
+   exactly when each link went down and came back. The text report is
+   appended at the end.
 
 ### Importing into Grafana
 

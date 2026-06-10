@@ -1,7 +1,7 @@
 ==============================================================================
  VIVE TRACKER LINK REPORT
 ==============================================================================
- Location: bay3-mixed    10 Jun 2026, 13:39    monitored for 300s    6 tracker(s)
+ Location: bay3-mixed    10 Jun 2026, 14:05    monitored for 300s    6 tracker(s)
 
  RADIO PROBLEM: dongle D-FLOOR-7A21 lost its radio link 3.9% of the time (42
  drops). The dongle, not the lighthouses, is the bottleneck.
@@ -11,7 +11,7 @@
  Radio loss = tracker could not reach this dongle. Lighthouse loss = tracker
  could not see the base stations (not a dongle problem).
    dongle             trackers  radio link            radio drops  stalls  lighthouse
-   D-FLOOR-7A21              3  FAILING  3.91% lost            42      27  Good  0.40% lost
+   D-FLOOR-7A21              3  FAILING  3.91% lost            42       0  Good  0.40% lost
    D-MAST-3C04               3  Good  0.12% lost                0       0  Good  1.24% lost
 
  RECOMMENDATION: dongle D-FLOOR-7A21 has 33.5x the radio loss of the best
@@ -34,7 +34,7 @@
    tracker               dongle            first issue type    last issue
    LHB-2A41F0            D-FLOOR-7A21      09:44:11    drop    09:46:20
    LHB-7C0093            D-FLOOR-7A21      09:44:13    drop    09:46:15
-   LHB-9912AB            D-FLOOR-7A21      09:44:30    stall   09:46:00
+   LHB-9912AB            D-FLOOR-7A21      09:44:30    drop    09:46:00
 
  Raw data: the per-second CSV and the event log were saved in the same folder
  as this report. The event log lists every drop with its exact timestamp.

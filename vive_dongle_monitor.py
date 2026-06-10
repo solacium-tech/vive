@@ -95,8 +95,10 @@ def render(snap, site, recent_notes):
                        f"  dropouts {r['disconnect_events']:<3} "
                        f"stalls {r['stall_events']:<3} "
                        f"longest {r['longest_disconnect_s']:4.1f}s")
+            hz = (f"{r['update_hz']:5.1f}Hz" if r["update_hz"] is not None
+                  else "  n/a ")
             out.append(f"    optic: {op_txt}"
-                       f"  rate {r['update_hz']:5.1f}Hz  batt {batt}")
+                       f"  rate {hz}  batt {batt}")
         out.append("")
 
     if recent_notes:

@@ -38,8 +38,7 @@ COLUMNS = (
     ("optic",   "Lighthouse (line of sight)",    170, "w"),
     ("rate",    "Updates/sec",                    90, "center"),
     ("batt",    "Battery",                        70, "center"),
-    ("link",    "Connected",                      80, "center"),
-    ("first",   "First issue at",                 95, "center"),
+    ("link",    "Connected",                      90, "center"),
 )
 
 LEGEND = (
@@ -422,7 +421,7 @@ class MonitorApp:
         if self._census_node is None:
             self._census_node = self.tree.insert(
                 "", "end", text="Devices SteamVR can see (no trackers yet)",
-                values=("", "", "", "", "", "", ""), open=True,
+                values=("", "", "", "", "", ""), open=True,
                 tags=("dongle",))
         existing = set(self.tree.get_children(self._census_node))
         wanted = set()
@@ -431,7 +430,7 @@ class MonitorApp:
             wanted.add(iid)
             dongle = d["dongle"] or "(none)"
             vals = (d["class"], "", f"dongle: {dongle}", "", "",
-                    "Up" if d["connected"] else "DOWN", "")
+                    "Up" if d["connected"] else "DOWN")
             text = "    " + (d["serial"] or d["model"] or f"index {d['index']}")
             if self.tree.exists(iid):
                 self.tree.item(iid, text=text, values=vals)
@@ -453,7 +452,7 @@ class MonitorApp:
             d_vals = (f"{rf_word}  -  {a['rf_loss_pct']:.2f}% lost",
                       a["dropouts"],
                       f"{op_word}  -  {a['optical_loss_pct']:.2f}% lost",
-                      "", "", "", "")
+                      "", "", "")
             node = self._dongle_nodes.get(dongle)
             if node is None:
                 node = self.tree.insert("", "end", text=d_text, values=d_vals,
@@ -469,13 +468,14 @@ class MonitorApp:
                         else "?")
                 rf_word, _ = core.rf_verdict(r["rf_loss_pct"])
                 op_word, _ = core.optical_verdict(r["optical_loss_pct"])
+                hz = ("n/a" if r["update_hz"] is None
+                      else f"{r['update_hz']:.0f}")
                 vals = (f"{rf_word}  -  {r['rf_loss_pct']:.2f}% lost",
                         r["disconnect_events"],
                         f"{op_word}  -  {r['optical_loss_pct']:.2f}% lost",
-                        f"{r['update_hz']:.0f}",
+                        hz,
                         batt,
-                        "Up" if r["connected"] else "DOWN",
-                        core.fmt_clock(r.get("first_issue_time")))
+                        "Up" if r["connected"] else "DOWN")
                 name = r.get("name")
                 label = (f"{name}  ({r['serial']})" if name
                          else r["serial"])
