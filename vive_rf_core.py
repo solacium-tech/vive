@@ -34,6 +34,7 @@ except ImportError:
 POLL_HZ = 250
 CSV_PERIOD_S = 1.0
 BATTERY_PERIOD_S = 5.0
+CENSUS_PERIOD_S = 1.0       # how often the full device census is rebuilt
 STALL_MS = 60               # connected but no new input packet -> stall
 
 # Classification thresholds (percent)
@@ -395,7 +396,8 @@ class RFMonitor(threading.Thread):
         self.log_dir = log_dir
         self.enable_log = enable_log
 
-        self._lock = threading.Lock()
+        # Re-entrant: the sampling thread may call helpers that also lock.
+        self._lock = threading.RLock()
         self._stop = threading.Event()
         self.ready = threading.Event()
         self.error = None
@@ -477,6 +479,7 @@ class RFMonitor(threading.Thread):
         prev = self.started_at
         last_csv = 0.0
         last_battery = 0.0
+        last_census = 0.0
         event = openvr.VREvent_t()
 
         try:
@@ -487,9 +490,12 @@ class RFMonitor(threading.Thread):
 
                 self._drain_vr_events(event, now)
                 read_batt = (now - last_battery) >= BATTERY_PERIOD_S
-                self._sample(now, dt, read_batt)
+                do_census = (now - last_census) >= CENSUS_PERIOD_S
+                self._sample(now, dt, read_batt, do_census)
                 if read_batt:
                     last_battery = now
+                if do_census:
+                    last_census = now
                 if self._csv_writer and (now - last_csv) >= CSV_PERIOD_S:
                     last_csv = now
                     self._write_csv()
@@ -531,19 +537,20 @@ class RFMonitor(threading.Thread):
                             f"dongle={dongle or 'UNKNOWN'}")
         return st
 
-    def _sample(self, now, dt, read_batt):
+    def _sample(self, now, dt, read_batt, do_census):
         poses = self._vr.getDeviceToAbsoluteTrackingPose(
             openvr.TrackingUniverseRawAndUncalibrated, 0,
             openvr.k_unMaxTrackedDeviceCount)
 
-        dropped_by_dongle = defaultdict(list)
-        census = []
-        with self._lock:
-            for idx in range(openvr.k_unMaxTrackedDeviceCount):
-                cls = self._vr.getTrackedDeviceClass(idx)
-                if cls == openvr.TrackedDeviceClass_Invalid:
-                    continue
-                # Census of every device SteamVR reports, for diagnostics.
+        # Gather all per-device SteamVR data first, without holding our lock,
+        # so the UI thread is never blocked on slow IPC property reads.
+        census = [] if do_census else None
+        updates = []   # (idx, packet_num, battery) for tracked devices
+        for idx in range(openvr.k_unMaxTrackedDeviceCount):
+            cls = self._vr.getTrackedDeviceClass(idx)
+            if cls == openvr.TrackedDeviceClass_Invalid:
+                continue
+            if do_census:
                 census.append({
                     "index": idx,
                     "class": _class_name(cls),
@@ -556,31 +563,37 @@ class RFMonitor(threading.Thread):
                         openvr.Prop_ConnectedWirelessDongle_String),
                     "connected": bool(poses[idx].bDeviceIsConnected),
                 })
+            if not _is_tracked_class(cls):
+                continue
+            ok, state = self._vr.getControllerState(idx)
+            packet_num = state.unPacketNum if ok else None
+            battery = None
+            if read_batt:
+                b = _get_float(self._vr, idx,
+                               openvr.Prop_DeviceBatteryPercentage_Float)
+                if b is not None:
+                    battery = b * 100.0
+            updates.append((idx, packet_num, battery))
 
+        dropped_by_dongle = defaultdict(list)
+        with self._lock:
+            for idx, packet_num, battery in updates:
                 st = self._ensure_tracker(idx, now)
                 if st is None:
                     continue
-                packet_num = None
-                ok, state = self._vr.getControllerState(idx)
-                if ok:
-                    packet_num = state.unPacketNum
-
                 if st.update(poses[idx], packet_num, now, dt):
                     dropped_by_dongle[st.dongle].append(st.serial)
+                if battery is not None:
+                    st.battery = battery
 
-                if read_batt:
-                    b = _get_float(self._vr, idx,
-                                   openvr.Prop_DeviceBatteryPercentage_Float)
-                    if b is not None:
-                        st.battery = b * 100.0
-
-            self.census = census
-            if not self._census_logged and census:
-                self._census_logged = True
-                for d in census:
-                    self._log_event(
-                        f"DEVICE class={d['class']} serial={d['serial']} "
-                        f"model={d['model']} dongle={d['dongle'] or '-'}")
+            if census is not None:
+                self.census = census
+                if not self._census_logged:
+                    self._census_logged = True
+                    for d in census:
+                        self._log_event(
+                            f"DEVICE class={d['class']} serial={d['serial']} "
+                            f"model={d['model']} dongle={d['dongle'] or '-'}")
 
             dongle_members = defaultdict(list)
             for st in self.trackers.values():
