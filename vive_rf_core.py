@@ -413,18 +413,48 @@ class RFMonitor(threading.Thread):
     def stop(self):
         self._stop.set()
 
+    @staticmethod
+    def _init_error_message(exc):
+        """Turn an openvr.init failure into specific, actionable guidance."""
+        detail = str(exc)
+        # pyopenvr names the cause in the exception, e.g.
+        # "VRInitError_Init_NoServerForBackgroundApp".
+        if "NoServerForBackgroundApp" in detail or "Init_NoServer" in detail:
+            tip = ("SteamVR is not running yet. Start SteamVR first, wait "
+                   "until the headset shows as active, then press Start.")
+        elif "HmdNotFound" in detail or "Init_HmdNotFound" in detail:
+            tip = ("SteamVR is up but no headset is detected. Connect/turn on "
+                   "the headset (or enable a Null/headless driver) so SteamVR "
+                   "becomes active, then press Start.")
+        elif "PathRegistry" in detail or "InstallationNotFound" in detail:
+            tip = ("SteamVR could not be located on this PC. Open SteamVR "
+                   "once from Steam, then try again.")
+        else:
+            tip = ("Could not attach to SteamVR. Make sure SteamVR is running "
+                   "and active, then press Start.")
+        return f"{tip}\n\n(Technical detail: {detail})"
+
     def run(self):
         if openvr is None:
             self.error = "The 'openvr' package is not available."
             self.ready.set()
             return
-        try:
-            self._vr = openvr.init(openvr.VRApplication_Background)
-        except Exception:
-            self.error = ("Cannot connect to SteamVR. Check that SteamVR is "
-                          "running and the trackers are powered on and paired.")
-            self.ready.set()
-            return
+
+        # SteamVR may still be starting up, so retry the connection for a few
+        # seconds rather than failing on the first attempt.
+        deadline = time.time() + 8.0
+        last_exc = None
+        while True:
+            try:
+                self._vr = openvr.init(openvr.VRApplication_Background)
+                break
+            except Exception as exc:
+                last_exc = exc
+                if self._stop.is_set() or time.time() >= deadline:
+                    self.error = self._init_error_message(last_exc)
+                    self.ready.set()
+                    return
+                time.sleep(0.5)
 
         self._open_logs()
         self.started_at = time.time()
