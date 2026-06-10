@@ -10,6 +10,9 @@ independently, per tracker and per USB dongle:
 2. **Optical (lighthouse) problems** - the tracker cannot see the base
    stations (occlusion, range, reflections).
 
+> **New here?** See the step-by-step [How to use](docs/HOW_TO_USE.md) guide
+> (with screenshots).
+
 Most tracker health monitoring only covers the optical side. This tool
 instruments the radio side as well, and because every tracker reports the
 serial number of the dongle it is paired with, dropouts can be aggregated and
