@@ -184,15 +184,33 @@ class MonitorApp:
                 "Enter a location label first (for example \"bay3-floor\").\n"
                 "It is used to name the report files so runs can be compared.")
             return
+        # Connecting to SteamVR can take a few seconds (and may retry), so do
+        # it on the monitor's own thread and poll for the result from the Tk
+        # event loop. Blocking here would freeze the window ("Not responding").
         self.mon = core.RFMonitor(site=site)
         self.mon.start()
-        self.mon.ready.wait(timeout=10)
+        self._clear_table()
+        self.start_btn.config(state="disabled")
+        self._set_banner(core.WARN, "Connecting to SteamVR...")
+        self.status_var.set("Connecting to SteamVR...")
+        self.root.after(150, self._await_ready)
+
+    def _await_ready(self):
+        if not self.mon:
+            return
+        if not self.mon.ready.is_set():
+            self.root.after(150, self._await_ready)
+            return
         if self.mon.error:
             messagebox.showerror(APP_TITLE, self.mon.error)
             self.mon = None
+            self.start_btn.config(state="normal")
+            self._set_banner("idle", "Not monitoring. Start SteamVR, power "
+                             "on the trackers, then press \"Start "
+                             "monitoring\".")
+            self.status_var.set("Ready.")
             return
-        self._clear_table()
-        self.start_btn.config(state="disabled")
+        site = self.mon.site
         self.stop_btn.config(state="normal")
         self.logs_btn.config(state="normal")
         self.status_var.set(f"Monitoring \"{site}\". Reports are saved "
@@ -288,7 +306,9 @@ class MonitorApp:
     # ---- periodic refresh ----
 
     def _tick(self):
-        if self.mon:
+        # Only refresh once the monitor has connected; while it is still
+        # connecting, _await_ready owns the banner/status.
+        if self.mon and self.mon.ready.is_set() and not self.mon.error:
             snap = self.mon.snapshot()
             self._update_table(snap)
             self._update_banner(snap)
