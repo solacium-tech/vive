@@ -41,7 +41,11 @@ RF, not to the lighthouses.
 
 - **Status banner** - one line, always answering "is anything wrong right
   now": green (all radio links healthy), amber (a dongle shows a weak link),
-  red (a dongle is failing, named in the banner).
+  red (a dongle is failing, named in the banner). The banner, the row colours
+  and the on-screen "% lost" reflect a recent rolling window (about the last
+  30 s) so a tracker moved back into range clears within seconds rather than
+  staying flagged for the whole run. The saved report keeps the full-session
+  figures.
 - **Table** - trackers grouped under the dongle they are paired with,
   colour-coded per row. Every row carries two independent verdicts side by
   side, each with the percentage of time lost: "Radio link (to dongle)",

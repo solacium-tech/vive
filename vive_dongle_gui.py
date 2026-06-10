@@ -17,7 +17,7 @@ from tkinter import ttk, scrolledtext, messagebox
 import vive_rf_core as core
 
 APP_TITLE = "Vive Tracker Link Monitor"
-APP_VERSION = "2026-06-10e"   # shown in the title bar to confirm the build
+APP_VERSION = "2026-06-10f"   # shown in the title bar to confirm the build
 
 # fg / bg per severity
 SEV_STYLE = {
@@ -143,12 +143,18 @@ class MonitorApp:
     def _build_legend(self):
         frame = tk.Frame(self.root)
         frame.pack(fill="x", padx=8, pady=(0, 4))
+        row = tk.Frame(frame)
+        row.pack(fill="x")
         for sev, text in LEGEND:
             fg, bg = SEV_STYLE[sev]
-            tk.Label(frame, text="  " + text + "  ", fg=fg, bg=bg,
+            tk.Label(row, text="  " + text + "  ", fg=fg, bg=bg,
                      font=("Segoe UI", 9)).pack(side="left", padx=(0, 8))
-        tk.Label(frame, text=LEGEND_HINT, fg="#546e7a",
+        tk.Label(row, text=LEGEND_HINT, fg="#546e7a",
                  font=("Segoe UI", 9)).pack(side="left", padx=4)
+        tk.Label(frame, text=f"Colours and % show roughly the last "
+                 f"{core.RECENT_WINDOW_S:.0f}s (live); the saved report "
+                 f"covers the whole session.", fg="#90a4ae",
+                 font=("Segoe UI", 8)).pack(anchor="w", padx=2)
 
     def _build_event_log(self):
         frame = tk.LabelFrame(self.root, text=" Event log ",
@@ -410,13 +416,13 @@ class MonitorApp:
         worst_dongle = None
         worst_loss = 0.0
         for dongle, a in snap["aggregates"].items():
-            sev = core.severity(a["rf_loss_pct"],
-                                core.RF_LOSS_WARN, core.RF_LOSS_CRIT)
+            loss = a["recent_rf_loss_pct"]   # live banner = current health
+            sev = core.severity(loss, core.RF_LOSS_WARN, core.RF_LOSS_CRIT)
             if sev == core.CRIT or (sev == core.WARN and worst_key != core.CRIT):
-                if a["rf_loss_pct"] > worst_loss:
+                if loss > worst_loss:
                     worst_key = sev
                     worst_dongle = dongle
-                    worst_loss = a["rf_loss_pct"]
+                    worst_loss = loss
         if worst_key == core.CRIT:
             self._set_banner(core.CRIT,
                              f"PROBLEM: dongle {worst_dongle} is losing its "
@@ -469,12 +475,13 @@ class MonitorApp:
             self._census_node = None
         for dongle in sorted(snap["by_dongle"]):
             a = snap["aggregates"][dongle]
-            rf_word, _ = core.rf_verdict(a["rf_loss_pct"])
-            op_word, _ = core.optical_verdict(a["optical_loss_pct"])
+            # Live view uses the recent window so it tracks current health.
+            rf_word, _ = core.rf_verdict(a["recent_rf_loss_pct"])
+            op_word, _ = core.optical_verdict(a["recent_optical_loss_pct"])
             d_text = f"Dongle {dongle}   ({a['count']} tracker(s))"
-            d_vals = (f"{rf_word}  -  {a['rf_loss_pct']:.2f}% lost",
+            d_vals = (f"{rf_word}  -  {a['recent_rf_loss_pct']:.2f}% lost",
                       a["dropouts"],
-                      f"{op_word}  -  {a['optical_loss_pct']:.2f}% lost",
+                      f"{op_word}  -  {a['recent_optical_loss_pct']:.2f}% lost",
                       "", "", "")
             node = self._dongle_nodes.get(dongle)
             if node is None:
@@ -489,13 +496,15 @@ class MonitorApp:
                 iid = f"{dongle}/{r['serial']}"
                 batt = (f"{r['battery']:.0f}%" if r["battery"] is not None
                         else "?")
-                rf_word, _ = core.rf_verdict(r["rf_loss_pct"])
-                op_word, _ = core.optical_verdict(r["optical_loss_pct"])
+                # Live view: recent-window verdicts and colour so a recovered
+                # link clears within ~30s instead of staying red all session.
+                rf_word, _ = core.rf_verdict(r["recent_rf_loss_pct"])
+                op_word, _ = core.optical_verdict(r["recent_optical_loss_pct"])
                 hz = ("n/a" if r["update_hz"] is None
                       else f"{r['update_hz']:.0f}")
-                vals = (f"{rf_word}  -  {r['rf_loss_pct']:.2f}% lost",
+                vals = (f"{rf_word}  -  {r['recent_rf_loss_pct']:.2f}% lost",
                         r["disconnect_events"],
-                        f"{op_word}  -  {r['optical_loss_pct']:.2f}% lost",
+                        f"{op_word}  -  {r['recent_optical_loss_pct']:.2f}% lost",
                         hz,
                         batt,
                         "Up" if r["connected"] else "DOWN")
@@ -504,11 +513,11 @@ class MonitorApp:
                          else r["serial"])
                 if self.tree.exists(iid):
                     self.tree.item(iid, text="    " + label, values=vals,
-                                   tags=(r["severity"],))
+                                   tags=(r["recent_severity"],))
                 else:
                     self.tree.insert(node, "end", iid=iid,
                                      text="    " + label,
-                                     values=vals, tags=(r["severity"],))
+                                     values=vals, tags=(r["recent_severity"],))
 
     def _log_line(self, kind, msg, ts=None):
         stamp = (ts or datetime.now()).strftime("%H:%M:%S")

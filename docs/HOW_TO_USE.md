@@ -86,6 +86,13 @@ The colour and side tell you where to look:
 Let a session run long enough to be representative (move the rig through the
 poses/area you care about) before stopping.
 
+> **Live figures are "right now", not the whole run.** The colours and the
+> "% lost" in the table reflect roughly the **last 30 seconds**, so when a
+> tracker is moved back into range it clears from red to green within ~30 s
+> instead of staying flagged for the rest of the session. The **saved report**
+> (next step) uses the **full-session** figures, which is what you want for
+> comparing runs.
+
 ---
 
 ## Step 3 — Stop and save the report

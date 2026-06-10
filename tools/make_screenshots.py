@@ -54,6 +54,15 @@ def make_tracker(serial, dongle, name, rf_pct, opt_pct, hz, batt, drops,
     st.first_issue_time = first_issue
     st.first_issue_kind = first_kind
     st.last_issue_time = last_issue
+    # Fill the recent rolling window to match the current state, so the live
+    # view (which reads recent_*) shows the same verdict as the cumulative one.
+    per_sec = 250
+    nb = core.RECENT_WINDOW_S
+    for k in range(nb):
+        rf = int(round(per_sec * rf_pct / 100.0))
+        conn = per_sec - rf
+        oor = int(round(conn * opt_pct / 100.0))
+        st._recent.append((time.time() - (nb - k), per_sec, rf, conn, oor))
     return st
 
 

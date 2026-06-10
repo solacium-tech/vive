@@ -37,6 +37,14 @@ BATTERY_PERIOD_S = 5.0
 CENSUS_PERIOD_S = 1.0       # how often the full device census is rebuilt
 STALL_MS = 60               # connected but no new input packet -> stall
 
+# The live view answers "is this link OK right now", so its colours and
+# percentages are computed over a recent rolling window rather than the whole
+# session. Without this, loss accumulated while a tracker was out of range
+# keeps a recovered tracker flagged as failing for a long time, because the
+# lifetime average only drifts back down slowly. The saved report still uses
+# the full-session figures.
+RECENT_WINDOW_S = 30
+
 # Classification thresholds (percent)
 RF_LOSS_WARN = 0.5
 RF_LOSS_CRIT = 2.0
@@ -119,6 +127,16 @@ class TrackerStat:
         self.first_issue_kind = ""
         self.last_issue_time = None
 
+        # Rolling per-second buckets for the "recent" (live) figures. Each
+        # completed second is (t_end, samples, rf_loss, connected, oor);
+        # buckets older than RECENT_WINDOW_S are evicted.
+        self._recent = deque()
+        self._rb_start = None
+        self._rb_samples = 0
+        self._rb_rf = 0
+        self._rb_conn = 0
+        self._rb_oor = 0
+
         self.first_seen = time.time()
 
     def label_or_serial(self):
@@ -135,6 +153,7 @@ class TrackerStat:
         self.samples += 1
         self.win_samples += 1
         connected = bool(pose.bDeviceIsConnected)
+        oor = False
         edge = None
 
         if connected:
@@ -146,6 +165,7 @@ class TrackerStat:
             if pose.eTrackingResult == openvr.TrackingResult_Running_OutOfRange:
                 self.out_of_range_samples += 1
                 self.win_oor += 1
+                oor = True
 
             if packet_num is not None:
                 if self.last_packet is None:
@@ -187,7 +207,48 @@ class TrackerStat:
             self.disconnect_start = None
             edge = "reconnect"
         self.was_connected = connected
+        self._update_recent(now, connected, oor)
         return edge
+
+    def _update_recent(self, now, connected, oor):
+        """Fold one sample into the rolling per-second window."""
+        if self._rb_start is None:
+            self._rb_start = now
+        self._rb_samples += 1
+        if connected:
+            self._rb_conn += 1
+            if oor:
+                self._rb_oor += 1
+        else:
+            self._rb_rf += 1
+        if now - self._rb_start >= 1.0:
+            self._recent.append((now, self._rb_samples, self._rb_rf,
+                                 self._rb_conn, self._rb_oor))
+            self._rb_start = now
+            self._rb_samples = self._rb_rf = self._rb_conn = self._rb_oor = 0
+            cutoff = now - RECENT_WINDOW_S
+            while self._recent and self._recent[0][0] < cutoff:
+                self._recent.popleft()
+
+    def _recent_totals(self):
+        s, rf, conn, oor = (self._rb_samples, self._rb_rf,
+                            self._rb_conn, self._rb_oor)
+        for _, bs, brf, bconn, boor in self._recent:
+            s += bs
+            rf += brf
+            conn += bconn
+            oor += boor
+        return s, rf, conn, oor
+
+    @property
+    def recent_rf_loss_pct(self):
+        s, rf, _, _ = self._recent_totals()
+        return 100.0 * rf / s if s else 0.0
+
+    @property
+    def recent_optical_loss_pct(self):
+        _, _, conn, oor = self._recent_totals()
+        return 100.0 * oor / conn if conn else 0.0
 
     def finalize(self, now):
         if self.in_disconnect and self.disconnect_start is not None:
@@ -211,13 +272,11 @@ class TrackerStat:
             return None
         return self.packet_increments / self.connected_elapsed_s
 
-    def classify(self):
-        """Return (label, severity, family) for the dominant problem."""
-        rf = self.rf_loss_pct
-        opt = self.optical_loss_pct
+    @staticmethod
+    def _classify(rf, opt, stalls):
         if rf >= RF_LOSS_CRIT:
             return "Radio failing (dongle)", CRIT, "rf"
-        if rf >= RF_LOSS_WARN or self.stall_events > 0:
+        if rf >= RF_LOSS_WARN or stalls > 0:
             return "Radio weak (dongle)", WARN, "rf"
         if opt >= OPTICAL_CRIT:
             return "Lighthouse blocked", CRIT, "optic"
@@ -225,8 +284,19 @@ class TrackerStat:
             return "Lighthouse marginal", WARN, "optic"
         return "Healthy", HEALTHY, "ok"
 
+    def classify(self):
+        """(label, severity, family) for the dominant problem over the run."""
+        return self._classify(self.rf_loss_pct, self.optical_loss_pct,
+                              self.stall_events)
+
+    def classify_recent(self):
+        """As classify() but over the recent window - drives the live view."""
+        return self._classify(self.recent_rf_loss_pct,
+                              self.recent_optical_loss_pct, 0)
+
     def to_row(self):
         label, sev, family = self.classify()
+        recent_label, recent_sev, recent_family = self.classify_recent()
         return {
             "serial": self.serial,
             "name": self.name,
@@ -238,6 +308,13 @@ class TrackerStat:
             "family": family,
             "rf_loss_pct": self.rf_loss_pct,
             "optical_loss_pct": self.optical_loss_pct,
+            # Recent-window figures drive the live view so it tracks current
+            # health; the cumulative figures above feed the saved report.
+            "recent_rf_loss_pct": self.recent_rf_loss_pct,
+            "recent_optical_loss_pct": self.recent_optical_loss_pct,
+            "recent_label": recent_label,
+            "recent_severity": recent_sev,
+            "recent_family": recent_family,
             "update_hz": self.update_hz,
             "battery": self.battery,
             "disconnect_events": self.disconnect_events,
@@ -398,7 +475,9 @@ def build_report_lines(site, snap, generated=None):
     out.append(("h2", "DONGLES (worst radio link first)"))
     emit("note", "Radio loss = tracker could not reach this dongle. "
          "Lighthouse loss = tracker could not see the base stations "
-         "(not a dongle problem).")
+         "(not a dongle problem). All percentages are for the whole "
+         "session; the live view showed roughly the last "
+         f"{RECENT_WINDOW_S:.0f}s.")
     out.append(("header", f"  {'dongle':<18}{'trackers':>9}  "
                 f"{'radio link':<22}{'radio drops':>11}{'stalls':>8}  "
                 f"{'lighthouse':<22}"))
@@ -815,6 +894,8 @@ class RFMonitor(threading.Thread):
                 "count": len(group),
                 "rf_loss_pct": sum(g["rf_loss_pct"] for g in group) / len(group),
                 "optical_loss_pct": sum(g["optical_loss_pct"] for g in group) / len(group),
+                "recent_rf_loss_pct": sum(g["recent_rf_loss_pct"] for g in group) / len(group),
+                "recent_optical_loss_pct": sum(g["recent_optical_loss_pct"] for g in group) / len(group),
                 "dropouts": sum(g["disconnect_events"] for g in group),
                 "stalls": sum(g["stall_events"] for g in group),
             }
