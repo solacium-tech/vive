@@ -111,7 +111,18 @@ class TrackerStat:
         self.longest_disconnect_s = 0.0
         self.connected_elapsed_s = 0.0
 
+        # wall-clock (epoch) of first/last radio issue (drop or stall)
+        self.first_issue_time = None
+        self.first_issue_kind = ""
+        self.last_issue_time = None
+
         self.first_seen = time.time()
+
+    def _mark_issue(self, now, kind):
+        if self.first_issue_time is None:
+            self.first_issue_time = now
+            self.first_issue_kind = kind
+        self.last_issue_time = now
 
     def update(self, pose, packet_num, now, dt):
         """Fold in one sample. Returns True on a connected->down edge."""
@@ -145,6 +156,7 @@ class TrackerStat:
                     self.stall_events += 1
                     self.win_stalls += 1
                     self._in_stall = True
+                    self._mark_issue(now, "stall")
         else:
             self.rf_loss_samples += 1
             self.win_rf_loss += 1
@@ -155,6 +167,7 @@ class TrackerStat:
             self.disconnect_events += 1
             self.win_drops += 1
             dropped_edge = True
+            self._mark_issue(now, "drop")
         elif connected and not self.was_connected:
             if self.disconnect_start is not None:
                 dur = now - self.disconnect_start
@@ -218,6 +231,9 @@ class TrackerStat:
             "stall_events": self.stall_events,
             "longest_disconnect_s": self.longest_disconnect_s,
             "connected": self.was_connected,
+            "first_issue_time": self.first_issue_time,
+            "first_issue_kind": self.first_issue_kind,
+            "last_issue_time": self.last_issue_time,
         }
 
     def pop_window(self):
@@ -299,6 +315,13 @@ def _class_name(cls):
         openvr.TrackedDeviceClass_DisplayRedirect: "Display redirect",
     }
     return names.get(cls, f"Other({cls})")
+
+
+def fmt_clock(epoch):
+    """Format an epoch timestamp as HH:MM:SS, or '-' if None."""
+    if not epoch:
+        return "-"
+    return datetime.fromtimestamp(epoch).strftime("%H:%M:%S")
 
 
 def build_report_lines(site, snap, generated=None):
@@ -405,9 +428,26 @@ def build_report_lines(site, snap, generated=None):
                     f"{r['longest_disconnect_s']:>8.1f}s  {optic:<22}"
                     f"{batt:>8}"))
 
+    # When did each tracker first run into trouble?
+    issues = [r for r in rows if r.get("first_issue_time")]
+    if issues:
+        out.append(("plain", ""))
+        out.append(("h2", "FIRST ISSUE TIMES (when each tracker first "
+                          "dropped or degraded)"))
+        out.append(("header", f"  {'tracker':<22}{'dongle':<18}"
+                    f"{'first issue':<12}{'type':<8}{'last issue':<12}"))
+        for r in sorted(issues, key=lambda r: r["first_issue_time"]):
+            sev = ("row-crit" if r["family"] == "rf" else "row-warn")
+            out.append((sev,
+                        f"  {r['label_name'][:21]:<22}{r['dongle']:<18}"
+                        f"{fmt_clock(r['first_issue_time']):<12}"
+                        f"{r['first_issue_kind']:<8}"
+                        f"{fmt_clock(r['last_issue_time']):<12}"))
+
     out.append(("plain", ""))
     emit("note", "Raw data: the per-second CSV and the event log were "
-         "saved in the same folder as this report.")
+         "saved in the same folder as this report. The event log lists every "
+         "drop with its exact timestamp.")
     return out
 
 

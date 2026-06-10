@@ -38,7 +38,8 @@ COLUMNS = (
     ("optic",   "Lighthouse (line of sight)",    170, "w"),
     ("rate",    "Updates/sec",                    90, "center"),
     ("batt",    "Battery",                        70, "center"),
-    ("link",    "Connected",                      90, "center"),
+    ("link",    "Connected",                      80, "center"),
+    ("first",   "First issue at",                 95, "center"),
 )
 
 LEGEND = (
@@ -78,6 +79,11 @@ class MonitorApp:
         tk.Label(bar, text="  " + APP_TITLE, bg=HEADER_BG, fg="white",
                  font=("Segoe UI", 13, "bold")).pack(side="left", pady=8)
 
+        # Persistent state chip so it's always obvious whether a run is live.
+        self.chip = tk.Label(bar, text="  IDLE  ", bg="#607d8b", fg="white",
+                             font=("Segoe UI", 10, "bold"), padx=6)
+        self.chip.pack(side="left", padx=10, pady=8)
+
         self.stop_btn = tk.Button(
             bar, text="Stop and save report", command=self.stop,
             bg="#c62828", fg="white", font=("Segoe UI", 10, "bold"),
@@ -108,6 +114,9 @@ class MonitorApp:
     def _set_banner(self, key, text):
         fg, bg = BANNER_STYLE[key]
         self.banner.config(text=text, fg=fg, bg=bg)
+
+    def _set_chip(self, text, bg):
+        self.chip.config(text=f"  {text}  ", bg=bg)
 
     def _build_table(self):
         frame = tk.Frame(self.root)
@@ -192,6 +201,7 @@ class MonitorApp:
         self.mon.start()
         self._clear_table()
         self.start_btn.config(state="disabled")
+        self._set_chip("CONNECTING", "#ff9800")
         self._set_banner(core.WARN, "Connecting to SteamVR...")
         self.status_var.set("Connecting to SteamVR...")
         self.root.after(150, self._await_ready)
@@ -206,6 +216,7 @@ class MonitorApp:
             messagebox.showerror(APP_TITLE, self.mon.error)
             self.mon = None
             self.start_btn.config(state="normal")
+            self._set_chip("IDLE", "#607d8b")
             self._set_banner("idle", "Not monitoring. Start SteamVR, power "
                              "on the trackers, then press \"Start "
                              "monitoring\".")
@@ -214,6 +225,7 @@ class MonitorApp:
         site = self.mon.site
         self.stop_btn.config(state="normal")
         self.logs_btn.config(state="normal")
+        self._set_chip("● MONITORING", "#2e7d32")
         self.status_var.set(f"Monitoring \"{site}\". Reports are saved "
                             f"automatically when you stop.")
         self._log_line("info", f"Monitoring started for location: {site}")
@@ -232,12 +244,19 @@ class MonitorApp:
         self.stop_btn.config(state="disabled")
         self.open_report_btn.config(state="normal")
         report = os.path.basename(self.report_path) if self.report_path else ""
+        self._set_chip("STOPPED - SAVED", "#2e7d32")
         self._set_banner(core.HEALTHY,
-                         f"✓ Report saved: {report}   "
-                         f"(in the reports folder)")
+                         f"✓ MONITORING STOPPED - report saved: {report}")
         self.status_var.set(f"Report saved in: {self.log_dir}")
         self._log_line("info", f"Monitoring stopped. Report saved: {report}")
         self._show_summary_window(site, snap)
+        # Unmissable confirmation that requires acknowledgement.
+        messagebox.showinfo(
+            "Monitoring stopped - report saved",
+            f"Monitoring has stopped and the report has been saved.\n\n"
+            f"File:  {report}\n"
+            f"Folder:  {self.log_dir}\n\n"
+            f"Use \"Open report\" or \"Open reports folder\" to view it.")
 
     # Colours for the summary window, keyed by report line tag.
     SUMMARY_TAGS = {
@@ -403,7 +422,8 @@ class MonitorApp:
         if self._census_node is None:
             self._census_node = self.tree.insert(
                 "", "end", text="Devices SteamVR can see (no trackers yet)",
-                values=("", "", "", "", "", ""), open=True, tags=("dongle",))
+                values=("", "", "", "", "", "", ""), open=True,
+                tags=("dongle",))
         existing = set(self.tree.get_children(self._census_node))
         wanted = set()
         for d in census:
@@ -411,7 +431,7 @@ class MonitorApp:
             wanted.add(iid)
             dongle = d["dongle"] or "(none)"
             vals = (d["class"], "", f"dongle: {dongle}", "", "",
-                    "Up" if d["connected"] else "DOWN")
+                    "Up" if d["connected"] else "DOWN", "")
             text = "    " + (d["serial"] or d["model"] or f"index {d['index']}")
             if self.tree.exists(iid):
                 self.tree.item(iid, text=text, values=vals)
@@ -433,7 +453,7 @@ class MonitorApp:
             d_vals = (f"{rf_word}  -  {a['rf_loss_pct']:.2f}% lost",
                       a["dropouts"],
                       f"{op_word}  -  {a['optical_loss_pct']:.2f}% lost",
-                      "", "", "")
+                      "", "", "", "")
             node = self._dongle_nodes.get(dongle)
             if node is None:
                 node = self.tree.insert("", "end", text=d_text, values=d_vals,
@@ -454,7 +474,8 @@ class MonitorApp:
                         f"{op_word}  -  {r['optical_loss_pct']:.2f}% lost",
                         f"{r['update_hz']:.0f}",
                         batt,
-                        "Up" if r["connected"] else "DOWN")
+                        "Up" if r["connected"] else "DOWN",
+                        core.fmt_clock(r.get("first_issue_time")))
                 name = r.get("name")
                 label = (f"{name}  ({r['serial']})" if name
                          else r["serial"])
