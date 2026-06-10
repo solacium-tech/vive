@@ -56,6 +56,7 @@ class MonitorApp:
         self.root = root
         self.mon = None
         self._dongle_nodes = {}
+        self._census_node = None
         root.title(APP_TITLE)
         root.geometry("1000x680")
         root.minsize(860, 560)
@@ -320,9 +321,18 @@ class MonitorApp:
 
     def _update_banner(self, snap):
         if not snap["rows"]:
-            self._set_banner(core.WARN,
-                             "Waiting for trackers... check they are powered "
-                             "on and paired in SteamVR.")
+            counts = snap.get("class_counts", {})
+            if counts:
+                seen = ", ".join(f"{n} {name}{'s' if n != 1 else ''}"
+                                 for name, n in sorted(counts.items()))
+                self._set_banner(core.WARN,
+                                 f"Connected. SteamVR reports: {seen}. "
+                                 f"No trackers detected yet - power on the "
+                                 f"Vive trackers (not just the headset).")
+            else:
+                self._set_banner(core.WARN,
+                                 "Connected to SteamVR. Waiting for devices...")
+            self._update_devices_panel(snap.get("census", []))
             return
         worst_key = core.HEALTHY
         worst_dongle = None
@@ -352,8 +362,38 @@ class MonitorApp:
         for node in self.tree.get_children(""):
             self.tree.delete(node)
         self._dongle_nodes = {}
+        self._census_node = None
+
+    def _update_devices_panel(self, census):
+        """While no trackers are grouped yet, list every device SteamVR sees
+        so it is obvious what is and isn't detected (and its dongle value)."""
+        if self.tree.get_children("") and self._census_node is None:
+            return  # tracker rows are present; don't draw the census
+        if self._census_node is None:
+            self._census_node = self.tree.insert(
+                "", "end", text="Devices SteamVR can see (no trackers yet)",
+                values=("", "", "", "", "", ""), open=True, tags=("dongle",))
+        existing = set(self.tree.get_children(self._census_node))
+        wanted = set()
+        for d in census:
+            iid = f"dev{d['index']}"
+            wanted.add(iid)
+            dongle = d["dongle"] or "(none)"
+            vals = (d["class"], "", f"dongle: {dongle}", "", "",
+                    "Up" if d["connected"] else "DOWN")
+            text = "    " + (d["serial"] or d["model"] or f"index {d['index']}")
+            if self.tree.exists(iid):
+                self.tree.item(iid, text=text, values=vals)
+            else:
+                self.tree.insert(self._census_node, "end", iid=iid, text=text,
+                                 values=vals, tags=("warn",))
+        for iid in existing - wanted:
+            self.tree.delete(iid)
 
     def _update_table(self, snap):
+        if self._census_node is not None and snap["by_dongle"]:
+            self.tree.delete(self._census_node)
+            self._census_node = None
         for dongle in sorted(snap["by_dongle"]):
             a = snap["aggregates"][dongle]
             rf_word, _ = core.rf_verdict(a["rf_loss_pct"])

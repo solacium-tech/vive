@@ -251,6 +251,17 @@ def _is_tracked_class(cls):
                    openvr.TrackedDeviceClass_Controller)
 
 
+def _class_name(cls):
+    names = {
+        openvr.TrackedDeviceClass_HMD: "Headset",
+        openvr.TrackedDeviceClass_Controller: "Controller",
+        openvr.TrackedDeviceClass_GenericTracker: "Tracker",
+        openvr.TrackedDeviceClass_TrackingReference: "Base station",
+        openvr.TrackedDeviceClass_DisplayRedirect: "Display redirect",
+    }
+    return names.get(cls, f"Other({cls})")
+
+
 def build_report_lines(site, snap, generated=None):
     """Build the run report as (tag, text) line pairs.
 
@@ -391,6 +402,8 @@ class RFMonitor(threading.Thread):
 
         self.trackers = {}        # serial -> TrackerStat
         self.index_serial = {}    # device index -> serial
+        self.census = []          # every device SteamVR currently reports
+        self._census_logged = False
         self.notifications = deque(maxlen=200)
         self.started_at = None
         self.stopped_at = None
@@ -524,8 +537,26 @@ class RFMonitor(threading.Thread):
             openvr.k_unMaxTrackedDeviceCount)
 
         dropped_by_dongle = defaultdict(list)
+        census = []
         with self._lock:
             for idx in range(openvr.k_unMaxTrackedDeviceCount):
+                cls = self._vr.getTrackedDeviceClass(idx)
+                if cls == openvr.TrackedDeviceClass_Invalid:
+                    continue
+                # Census of every device SteamVR reports, for diagnostics.
+                census.append({
+                    "index": idx,
+                    "class": _class_name(cls),
+                    "serial": _get_str(self._vr, idx,
+                                       openvr.Prop_SerialNumber_String),
+                    "model": _get_str(self._vr, idx,
+                                      openvr.Prop_ModelNumber_String),
+                    "dongle": _get_str(
+                        self._vr, idx,
+                        openvr.Prop_ConnectedWirelessDongle_String),
+                    "connected": bool(poses[idx].bDeviceIsConnected),
+                })
+
                 st = self._ensure_tracker(idx, now)
                 if st is None:
                     continue
@@ -542,6 +573,14 @@ class RFMonitor(threading.Thread):
                                    openvr.Prop_DeviceBatteryPercentage_Float)
                     if b is not None:
                         st.battery = b * 100.0
+
+            self.census = census
+            if not self._census_logged and census:
+                self._census_logged = True
+                for d in census:
+                    self._log_event(
+                        f"DEVICE class={d['class']} serial={d['serial']} "
+                        f"model={d['model']} dongle={d['dongle'] or '-'}")
 
             dongle_members = defaultdict(list)
             for st in self.trackers.values():
@@ -636,6 +675,7 @@ class RFMonitor(threading.Thread):
         with self._lock:
             rows = [st.to_row() for st in self.trackers.values()]
             notes = list(self.notifications)
+            census = list(self.census)
             self.notifications.clear()
         by_dongle = defaultdict(list)
         for r in rows:
@@ -651,12 +691,17 @@ class RFMonitor(threading.Thread):
             }
         elapsed = ((self.stopped_at or time.time()) - self.started_at
                    if self.started_at else 0.0)
+        class_counts = defaultdict(int)
+        for d in census:
+            class_counts[d["class"]] += 1
         return {
             "rows": rows,
             "by_dongle": dict(by_dongle),
             "aggregates": aggregates,
             "notifications": notes,
             "elapsed": elapsed,
+            "census": census,
+            "class_counts": dict(class_counts),
         }
 
     def verdict_text(self):

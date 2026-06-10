@@ -57,7 +57,18 @@ def render(snap, site, recent_notes):
            f"Ctrl+C to stop.{RESET}", ""]
 
     if not snap["rows"]:
-        out.append(c("  Waiting for trackers... (power them on)", YELLOW))
+        counts = snap.get("class_counts", {})
+        if counts:
+            seen = ", ".join(f"{n} {name}" for name, n in sorted(counts.items()))
+            out.append(c(f"  Connected. SteamVR reports: {seen}", YELLOW))
+            out.append(c("  No trackers detected yet (power on the Vive "
+                         "trackers, not just the headset).", YELLOW))
+            for d in snap.get("census", []):
+                out.append(f"    {d['class']:<13} {d['serial']:<18} "
+                           f"dongle: {d['dongle'] or '(none)'}")
+        else:
+            out.append(c("  Connected to SteamVR. Waiting for devices...",
+                         YELLOW))
         sys.stdout.write("\n".join(out) + "\n")
         sys.stdout.flush()
         return
