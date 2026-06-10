@@ -74,10 +74,11 @@ def optical_verdict(loss_pct):
 class TrackerStat:
     """Accumulated link statistics for one tracked device."""
 
-    def __init__(self, serial, model, dongle):
+    def __init__(self, serial, model, dongle, name=""):
         self.serial = serial
         self.model = model
         self.dongle = dongle or "UNKNOWN"
+        self.name = name
         self.battery = None
 
         self.samples = 0
@@ -202,6 +203,8 @@ class TrackerStat:
         label, sev, family = self.classify()
         return {
             "serial": self.serial,
+            "name": self.name,
+            "label_name": self.name or self.serial,
             "model": self.model,
             "dongle": self.dongle,
             "label": label,
@@ -250,6 +253,41 @@ def _get_float(vr, idx, prop):
 def _is_tracked_class(cls):
     return cls in (openvr.TrackedDeviceClass_GenericTracker,
                    openvr.TrackedDeviceClass_Controller)
+
+
+NAMES_FILE = "tracker_names.csv"
+
+
+def load_tracker_names(path=NAMES_FILE):
+    """Read a serial,name mapping the user maintains. Missing file is fine."""
+    names = {}
+    if not os.path.isfile(path):
+        return names
+    try:
+        with open(path, newline="", encoding="utf-8-sig") as f:
+            for row in csv.reader(f):
+                if len(row) >= 2 and row[0].strip().lower() != "serial":
+                    serial, name = row[0].strip(), row[1].strip()
+                    if serial and name:
+                        names[serial] = name
+    except Exception:
+        pass
+    return names
+
+
+def write_tracker_names_template(path, serials, existing=None):
+    """Create a names template listing seen trackers, if it doesn't exist."""
+    if os.path.isfile(path):
+        return
+    existing = existing or {}
+    try:
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["serial", "name"])
+            for s in serials:
+                w.writerow([s, existing.get(s, "")])
+    except Exception:
+        pass
 
 
 def _class_name(cls):
@@ -352,7 +390,7 @@ def build_report_lines(site, snap, generated=None):
 
     out.append(("plain", ""))
     out.append(("h2", "TRACKERS (worst first)"))
-    out.append(("header", f"  {'tracker':<16}{'dongle':<18}"
+    out.append(("header", f"  {'tracker':<22}{'dongle':<18}"
                 f"{'radio link':<22}{'drops':>6}{'longest':>9}  "
                 f"{'lighthouse':<22}{'battery':>8}"))
     for r in sorted(rows, key=lambda r: (-r["rf_loss_pct"], r["serial"])):
@@ -362,7 +400,7 @@ def build_report_lines(site, snap, generated=None):
         radio = f"{rw}  {r['rf_loss_pct']:.2f}% lost"
         optic = f"{ow}  {r['optical_loss_pct']:.2f}% lost"
         out.append((f"row-{r['severity']}",
-                    f"  {r['serial']:<16}{r['dongle']:<18}{radio:<22}"
+                    f"  {r['label_name'][:21]:<22}{r['dongle']:<18}{radio:<22}"
                     f"{r['disconnect_events']:>6}"
                     f"{r['longest_disconnect_s']:>8.1f}s  {optic:<22}"
                     f"{batt:>8}"))
@@ -390,11 +428,14 @@ def build_report_text(site, snap, generated=None):
 class RFMonitor(threading.Thread):
     """Background sampler. Consumers call snapshot() for a thread-safe view."""
 
-    def __init__(self, site="site", log_dir="logs", enable_log=True):
+    def __init__(self, site="site", log_dir="logs", enable_log=True,
+                 names_path=NAMES_FILE):
         super().__init__(daemon=True)
         self.site = site
         self.log_dir = log_dir
         self.enable_log = enable_log
+        self.names_path = names_path
+        self.names = load_tracker_names(names_path)
 
         # Re-entrant: the sampling thread may call helpers that also lock.
         self._lock = threading.RLock()
@@ -406,6 +447,7 @@ class RFMonitor(threading.Thread):
         self.index_serial = {}    # device index -> serial
         self.census = []          # every device SteamVR currently reports
         self._census_logged = False
+        self._names_template_written = False
         self.notifications = deque(maxlen=200)
         self.started_at = None
         self.stopped_at = None
@@ -530,11 +572,13 @@ class RFMonitor(threading.Thread):
             model = _get_str(self._vr, idx, openvr.Prop_ModelNumber_String)
             dongle = _get_str(self._vr, idx,
                               openvr.Prop_ConnectedWirelessDongle_String)
-            st = TrackerStat(serial, model, dongle)
+            st = TrackerStat(serial, model, dongle,
+                             name=self.names.get(serial, ""))
             with self._lock:
                 self.trackers[serial] = st
             self._log_event(f"DEVICE SEEN tracker={serial} model={model} "
-                            f"dongle={dongle or 'UNKNOWN'}")
+                            f"dongle={dongle or 'UNKNOWN'} "
+                            f"name={st.name or '-'}")
         return st
 
     def _sample(self, now, dt, read_batt, do_census):
@@ -599,6 +643,14 @@ class RFMonitor(threading.Thread):
             for st in self.trackers.values():
                 dongle_members[st.dongle].append(st)
 
+            # Once trackers are known, drop a names template the user can edit
+            # to label each serial (loaded automatically on the next run).
+            if (self.enable_log and not self._names_template_written
+                    and self.trackers):
+                self._names_template_written = True
+                write_tracker_names_template(
+                    self.names_path, sorted(self.trackers), self.names)
+
         for dongle, dropped in dropped_by_dongle.items():
             members = dongle_members.get(dongle, [])
             all_down = members and all(not m.was_connected for m in members)
@@ -628,8 +680,8 @@ class RFMonitor(threading.Thread):
         # that interval only (what time-series tools like Grafana want);
         # *_total columns are cumulative since the run started.
         self._csv_writer.writerow([
-            "timestamp", "epoch_s", "site", "tracker", "model", "dongle",
-            "connected",
+            "timestamp", "epoch_s", "site", "tracker", "tracker_name",
+            "model", "dongle", "connected",
             "rf_down_pct_1s", "optical_oor_pct_1s", "drops_1s", "stalls_1s",
             "rf_loss_pct_total", "optical_loss_pct_total",
             "drops_total", "stalls_total", "longest_disconnect_s",
@@ -651,8 +703,8 @@ class RFMonitor(threading.Thread):
                      for st in self.trackers.values()]
         for r, w in pairs:
             self._csv_writer.writerow([
-                ts, epoch, self.site, r["serial"], r["model"], r["dongle"],
-                int(bool(r["connected"])),
+                ts, epoch, self.site, r["serial"], r["name"],
+                r["model"], r["dongle"], int(bool(r["connected"])),
                 f"{w['rf_down_pct']:.3f}", f"{w['oor_pct']:.3f}",
                 w["drops"], w["stalls"],
                 f"{r['rf_loss_pct']:.3f}", f"{r['optical_loss_pct']:.3f}",

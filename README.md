@@ -198,6 +198,22 @@ the per-dongle ranking in the summary makes the comparison directly.
 | `docs/gui_preview.png`    | screenshot used above                              |
 | `docs/sample_report.txt`  | example of the saved report                        |
 
+## Naming trackers
+
+Vive trackers are identified by serial (e.g. `LHB-7C0093`). To show friendly
+names instead, the tool writes a `tracker_names.csv` next to the executable
+the first time it sees your trackers, listing each serial with a blank name:
+
+```
+serial,name
+LHB-7C0093,
+LHB-2A41F0,
+```
+
+Fill in the names (e.g. `LHB-7C0093,Robot-3 waist`), save, and on the next run
+the names appear in the table, the report and the CSV (`tracker_name` column).
+Edit the file any time; it is read at the start of each run.
+
 ## Notes
 
 - The input packet counter is a host-side indicator of radio starvation; it

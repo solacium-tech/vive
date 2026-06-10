@@ -231,9 +231,12 @@ class MonitorApp:
         self.start_btn.config(state="normal")
         self.stop_btn.config(state="disabled")
         self.open_report_btn.config(state="normal")
-        self._set_banner("idle", "Monitoring stopped. Report saved.")
-        self.status_var.set(f"Report files saved in: {self.log_dir}")
-        self._log_line("info", "Monitoring stopped, report saved.")
+        report = os.path.basename(self.report_path) if self.report_path else ""
+        self._set_banner(core.HEALTHY,
+                         f"✓ Report saved: {report}   "
+                         f"(in the reports folder)")
+        self.status_var.set(f"Report saved in: {self.log_dir}")
+        self._log_line("info", f"Monitoring stopped. Report saved: {report}")
         self._show_summary_window(site, snap)
 
     # Colours for the summary window, keyed by report line tag.
@@ -259,11 +262,20 @@ class MonitorApp:
 
     def _show_summary_window(self, site, snap):
         win = tk.Toplevel(self.root)
-        win.title(f"Run summary - {site}")
-        win.geometry("920x560")
-        text = tk.Text(win, font=("Consolas", 10), wrap="none",
+        win.title(f"Run summary - {site}  (report saved)")
+        win.geometry("920x580")
+        head = tk.Label(win, text="✓  Monitoring stopped - report saved",
+                        bg="#2e7d32", fg="white", anchor="w",
+                        font=("Segoe UI", 12, "bold"), padx=12, pady=8)
+        head.pack(fill="x")
+        path = tk.Label(win, text=f"Saved in:  {self.log_dir}", anchor="w",
+                        fg="#37474f", padx=12, pady=4)
+        path.pack(fill="x")
+        body = tk.Frame(win)
+        body.pack(fill="both", expand=True)
+        text = tk.Text(body, font=("Consolas", 10), wrap="none",
                        padx=12, pady=10, relief="flat")
-        vsb = ttk.Scrollbar(win, orient="vertical", command=text.yview)
+        vsb = ttk.Scrollbar(body, orient="vertical", command=text.yview)
         text.configure(yscroll=vsb.set)
         text.pack(side="left", fill="both", expand=True)
         vsb.pack(side="right", fill="y")
@@ -273,6 +285,14 @@ class MonitorApp:
         for tag, line in core.build_report_lines(site, snap):
             text.insert("end", line + "\n", (tag,))
         text.config(state="disabled")
+        tk.Button(win, text="Open reports folder", command=self._open_logs,
+                  relief="flat", fg="#0277bd", cursor="hand2").pack(pady=6)
+        # Make sure the operator actually notices it.
+        win.transient(self.root)
+        win.lift()
+        win.focus_force()
+        win.attributes("-topmost", True)
+        win.after(700, lambda: win.attributes("-topmost", False))
 
     @staticmethod
     def _open_file(path):
@@ -285,10 +305,21 @@ class MonitorApp:
             pass
 
     def _on_close(self):
-        if self.mon:
-            self.mon.stop()
-            self.mon.join(timeout=5)
-        self.root.destroy()
+        # Stop sampling and let the monitor flush its report/logs.
+        try:
+            if self.mon:
+                self.mon.stop()
+                self.mon.join(timeout=5)
+        except Exception:
+            pass
+        try:
+            self.root.destroy()
+        except Exception:
+            pass
+        # The SteamVR/OpenVR runtime keeps native threads alive, which can stop
+        # the process from exiting on its own; force a clean exit so the window
+        # closes without needing Task Manager.
+        os._exit(0)
 
     def _open_logs(self):
         path = getattr(self, "log_dir", os.path.abspath("logs"))
@@ -424,11 +455,15 @@ class MonitorApp:
                         f"{r['update_hz']:.0f}",
                         batt,
                         "Up" if r["connected"] else "DOWN")
+                name = r.get("name")
+                label = (f"{name}  ({r['serial']})" if name
+                         else r["serial"])
                 if self.tree.exists(iid):
-                    self.tree.item(iid, values=vals, tags=(r["severity"],))
+                    self.tree.item(iid, text="    " + label, values=vals,
+                                   tags=(r["severity"],))
                 else:
                     self.tree.insert(node, "end", iid=iid,
-                                     text="    " + r["serial"],
+                                     text="    " + label,
                                      values=vals, tags=(r["severity"],))
 
     def _log_line(self, kind, msg, ts=None):
