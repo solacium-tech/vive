@@ -17,6 +17,7 @@ from tkinter import ttk, scrolledtext, messagebox
 import vive_rf_core as core
 
 APP_TITLE = "Vive Tracker Link Monitor"
+APP_VERSION = "2026-06-10e"   # shown in the title bar to confirm the build
 
 # fg / bg per severity
 SEV_STYLE = {
@@ -57,7 +58,7 @@ class MonitorApp:
         self.mon = None
         self._dongle_nodes = {}
         self._census_node = None
-        root.title(APP_TITLE)
+        root.title(f"{APP_TITLE}  -  build {APP_VERSION}")
         root.geometry("1000x680")
         root.minsize(860, 560)
         root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -233,29 +234,51 @@ class MonitorApp:
         if not self.mon:
             return
         site = self.mon.site
-        self.mon.stop()
-        self.mon.join(timeout=5)
-        snap = self.mon.snapshot()
-        self.log_dir = os.path.abspath(self.mon.log_dir)
-        self.report_path = getattr(self.mon, "report_path", None)
-        self.mon = None
+        # 1) Stop sampling and capture what we can. Anything here that fails
+        #    must NOT prevent the on-screen confirmation below.
+        snap = None
+        try:
+            self.mon.stop()
+            self.mon.join(timeout=5)
+            self.log_dir = os.path.abspath(self.mon.log_dir)
+            self.report_path = getattr(self.mon, "report_path", None)
+            snap = self.mon.snapshot()
+        except Exception as exc:
+            self._log_line("alert", f"Error while stopping: {exc}")
+        finally:
+            self.mon = None
+
+        # 2) Always give clear, immediate feedback (and force a repaint so it
+        #    shows before the modal dialog opens).
+        report = os.path.basename(self.report_path) if getattr(
+            self, "report_path", None) else "(none)"
         self.start_btn.config(state="normal")
         self.stop_btn.config(state="disabled")
         self.open_report_btn.config(state="normal")
-        report = os.path.basename(self.report_path) if self.report_path else ""
         self._set_chip("STOPPED - SAVED", "#2e7d32")
         self._set_banner(core.HEALTHY,
                          f"✓ MONITORING STOPPED - report saved: {report}")
-        self.status_var.set(f"Report saved in: {self.log_dir}")
+        self.status_var.set(f"Report saved in: {getattr(self, 'log_dir', '')}")
         self._log_line("info", f"Monitoring stopped. Report saved: {report}")
-        self._show_summary_window(site, snap)
-        # Unmissable confirmation that requires acknowledgement.
+        self.root.update_idletasks()
+
+        # 3) Modal confirmation - guaranteed to appear and require an OK.
         messagebox.showinfo(
             "Monitoring stopped - report saved",
             f"Monitoring has stopped and the report has been saved.\n\n"
             f"File:  {report}\n"
-            f"Folder:  {self.log_dir}\n\n"
+            f"Folder:  {getattr(self, 'log_dir', '')}\n\n"
             f"Use \"Open report\" or \"Open reports folder\" to view it.")
+
+        # 4) Detailed summary window (best-effort; never blocks the feedback).
+        if snap is not None:
+            try:
+                self._show_summary_window(site, snap)
+            except Exception as exc:
+                messagebox.showerror(
+                    APP_TITLE,
+                    f"The report was saved, but the summary view could not be "
+                    f"shown:\n{exc}")
 
     # Colours for the summary window, keyed by report line tag.
     SUMMARY_TAGS = {
