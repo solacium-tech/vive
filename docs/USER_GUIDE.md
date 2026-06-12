@@ -133,11 +133,12 @@ bring them all back. Hiding applies to the current session.
 
 ### "Not in use" is not a fault
 
-If the **headset is switched off**, or **all (non hidden) trackers are powered
-down**, the app treats it as the operator stopping, not a radio fault. The state
-chip shows **`PAUSED (not in use)`**, the banner goes grey, and that idle time is
-**not counted** against the loss figures and raises **no drop alarms**. It
-resumes automatically the moment the headset goes back on or a tracker powers up.
+If the **headset is switched off or taken off your head**, or **all (non hidden)
+trackers are powered down**, the app treats it as the operator stopping, not a
+radio fault. The state chip shows **`PAUSED (not in use)`**, the banner goes
+grey, and that idle time is **not counted** against the loss figures and raises
+**no drop alarms**. It resumes automatically the moment the headset goes back on
+or a tracker powers up.
 A brief grace period ignores momentary blips, but counting stops immediately so
 the pause never pollutes the numbers.
 

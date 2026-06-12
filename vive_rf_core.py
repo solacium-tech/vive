@@ -430,6 +430,22 @@ def write_tracker_names_template(path, serials, existing=None):
         pass
 
 
+def _hmd_worn(vr, idx):
+    """Is the headset on the user's head?
+
+    SteamVR drives the HMD's activity level from its proximity sensor, so a
+    headset that is powered but lifted off the head reports something other
+    than UserInteraction. Returns True/False, or None when the runtime can't
+    tell (older builds) so the caller can fall back to power-state only.
+    """
+    try:
+        level = vr.getTrackedDeviceActivityLevel(idx)
+    except Exception:
+        return None
+    worn = getattr(openvr, "k_EDeviceActivityLevel_UserInteraction", 1)
+    return level == worn
+
+
 def _class_name(cls):
     names = {
         openvr.TrackedDeviceClass_HMD: "Headset",
@@ -769,6 +785,7 @@ class RFMonitor(threading.Thread):
         updates = []   # (idx, packet_num, battery) for tracked devices
         hmd_seen = False
         hmd_connected = False
+        hmd_worn = False
         tracked_seen = False
         tracked_connected = False
         for idx in range(openvr.k_unMaxTrackedDeviceCount):
@@ -778,7 +795,14 @@ class RFMonitor(threading.Thread):
             connected = bool(poses[idx].bDeviceIsConnected)
             if cls == openvr.TrackedDeviceClass_HMD:
                 hmd_seen = True
-                hmd_connected = hmd_connected or connected
+                if connected:
+                    hmd_connected = True
+                    # Taking the headset off the head (proximity off) counts as
+                    # not in use, even though it stays powered/connected. If the
+                    # runtime can't report it, fall back to "connected = worn".
+                    worn = _hmd_worn(self._vr, idx)
+                    if worn is None or worn:
+                        hmd_worn = True
             if do_census:
                 census.append({
                     "index": idx,
@@ -809,11 +833,11 @@ class RFMonitor(threading.Thread):
                     battery = b * 100.0
             updates.append((idx, packet_num, battery))
 
-        # "Not in use": the headset is off, or every tracker is powered off.
-        # Either way the disconnection is the operator stopping, not a radio
-        # fault, so we stop counting these samples (immediately, so the grace
-        # period never pollutes the report) and surface an idle state.
-        headset_off = hmd_seen and not hmd_connected
+        # "Not in use": the headset is off or taken off the head, or every
+        # tracker is powered off. Either way it is the operator stopping, not a
+        # radio fault, so we stop counting these samples (immediately, so the
+        # grace period never pollutes the report) and surface an idle state.
+        headset_off = hmd_seen and not hmd_worn
         trackers_known = tracked_seen or any(
             s not in self.dismissed for s in self.trackers)
         all_trackers_off = trackers_known and not tracked_connected
@@ -821,7 +845,8 @@ class RFMonitor(threading.Thread):
         if raw_idle:
             parts = []
             if headset_off:
-                parts.append("headset off")
+                parts.append("headset off" if not hmd_connected
+                             else "headset removed")
             if all_trackers_off:
                 parts.append("all trackers off")
             reason = " and ".join(parts)
