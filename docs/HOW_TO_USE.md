@@ -130,9 +130,18 @@ the **Open report** and **Open reports folder** buttons in the status bar.
 | `<label>_<timestamp>_series.csv` | One row per tracker per second — for Excel, pandas or Grafana. |
 | `<label>_<timestamp>_events.log` | Every radio drop and reconnect with a full timestamp. |
 
-Naming trackers (optional): after the first run a `tracker_names.csv` template
-is created next to the app. Fill in a friendly name per serial and it is shown
-automatically on the next run (e.g. `left-foot` instead of `LHR-9F8E7D01`).
+Naming trackers (optional): after the first run a `tracker_names.txt` template
+is created next to the app. It's a plain text file — **double-click to open it
+in Notepad** (no Excel or Microsoft login needed). Put one device per line as
+`SERIAL = friendly name`, save, and the names show automatically on the next
+run (e.g. `left-foot` instead of `LHR-9F8E7D01`).
+
+Hiding devices that aren't part of the run: if some devices aren't relevant —
+for example controllers used only for room setup and then switched off —
+**right-click their row and choose "Hide"**. Hidden devices disappear from the
+table, are left out of the stats and the saved report, and no longer count
+towards the "not in use" check. A "Hidden devices: N" link under the legend
+brings them all back.
 
 ---
 

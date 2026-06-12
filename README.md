@@ -211,18 +211,30 @@ the per-dongle ranking in the summary makes the comparison directly.
 ## Naming trackers
 
 Vive trackers are identified by serial (e.g. `LHB-7C0093`). To show friendly
-names instead, the tool writes a `tracker_names.csv` next to the executable
-the first time it sees your trackers, listing each serial with a blank name:
+names instead, the tool writes a plain-text `tracker_names.txt` next to the
+executable the first time it sees your trackers. Double-click it to edit in
+Notepad — no Excel or Microsoft login required:
 
 ```
-serial,name
-LHB-7C0093,
-LHB-2A41F0,
+# Tracker names - edit this in Notepad and save.
+# One device per line:   SERIAL = friendly name
+LHB-7C0093 = Robot-3 waist
+LHB-2A41F0 =
 ```
 
-Fill in the names (e.g. `LHB-7C0093,Robot-3 waist`), save, and on the next run
-the names appear in the table, the report and the CSV (`tracker_name` column).
-Edit the file any time; it is read at the start of each run.
+Fill in the names, save, and on the next run they appear in the table, the
+report and the CSV (`tracker_name` column). Edit the file any time; it is read
+at the start of each run. (An older `tracker_names.csv` is still read if that's
+all that's present.)
+
+## Hiding devices that aren't part of the run
+
+Some devices show up in SteamVR but aren't part of what you're measuring — for
+example controllers used only for room setup and then powered off, which would
+otherwise sit in the table as "DOWN" all session. Right-click their row and
+choose **Hide**. Hidden devices are removed from the table, excluded from the
+stats and the saved report, and ignored by the "not in use" pause check. Use
+the **Hidden devices: N** link under the legend to bring them all back.
 
 ## Notes
 

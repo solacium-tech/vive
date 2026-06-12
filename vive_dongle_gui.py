@@ -18,7 +18,7 @@ from tkinter import ttk, scrolledtext, messagebox
 import vive_rf_core as core
 
 APP_TITLE = "Vive Tracker Link Monitor"
-APP_VERSION = "2026-06-10g"   # shown in the title bar to confirm the build
+APP_VERSION = "2026-06-10h"   # shown in the title bar to confirm the build
 
 # fg / bg per severity
 SEV_STYLE = {
@@ -141,6 +141,12 @@ class MonitorApp:
         self.tree.pack(side="left", fill="both", expand=True)
         vsb.pack(side="right", fill="y")
 
+        # Right-click a tracker row to hide devices that aren't part of this
+        # run (e.g. controllers used only for room setup).
+        self._tree_menu = tk.Menu(self.root, tearoff=0)
+        self.tree.bind("<Button-3>", self._on_tree_menu)
+        self.tree.bind("<Button-2>", self._on_tree_menu)  # macOS
+
     def _build_legend(self):
         frame = tk.Frame(self.root)
         frame.pack(fill="x", padx=8, pady=(0, 4))
@@ -154,8 +160,17 @@ class MonitorApp:
                  font=("Segoe UI", 9)).pack(side="left", padx=4)
         tk.Label(frame, text=f"Colours and % show roughly the last "
                  f"{core.RECENT_WINDOW_S:.0f}s (live); the saved report "
-                 f"covers the whole session.", fg="#90a4ae",
+                 f"covers the whole session.   Right-click a row to hide a "
+                 f"device that isn't part of this run.", fg="#90a4ae",
                  font=("Segoe UI", 8)).pack(anchor="w", padx=2)
+
+        # Shown only when devices are hidden; click to bring them all back.
+        self.hidden_var = tk.StringVar(value="")
+        self.hidden_btn = tk.Button(
+            frame, textvariable=self.hidden_var, relief="flat", fg="#0277bd",
+            cursor="hand2", font=("Segoe UI", 9), bd=0,
+            command=self._restore_hidden, state="disabled")
+        self.hidden_btn.pack(anchor="w", padx=2)
 
     def _build_event_log(self):
         frame = tk.LabelFrame(self.root, text=" Event log ",
@@ -409,6 +424,7 @@ class MonitorApp:
             snap = self.mon.snapshot()
             self._update_table(snap)
             self._update_banner(snap)
+            self._refresh_hidden_indicator(snap)
             # Reflect the paused ("not in use") state in the run-state chip.
             if snap.get("paused"):
                 self._set_chip("❚❚ PAUSED (not in use)", "#607d8b")
@@ -548,6 +564,62 @@ class MonitorApp:
                     self.tree.insert(node, "end", iid=iid,
                                      text="    " + label,
                                      values=vals, tags=(r["recent_severity"],))
+
+    # ---- hiding irrelevant devices ----
+
+    def _on_tree_menu(self, event):
+        iid = self.tree.identify_row(event.y)
+        # Only tracker rows have a "dongle/serial" iid; dongle headers don't.
+        if not iid or "/" not in iid:
+            return
+        serial = iid.split("/", 1)[1]
+        label = self.tree.item(iid, "text").strip()
+        self._tree_menu.delete(0, "end")
+        self._tree_menu.add_command(
+            label=f"Hide \"{label}\"  (not part of this run)",
+            command=lambda s=serial, i=iid: self._hide_device(s, i))
+        try:
+            self._tree_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self._tree_menu.grab_release()
+
+    def _hide_device(self, serial, iid):
+        if not self.mon:
+            return
+        self.mon.dismiss(serial)
+        if self.tree.exists(iid):
+            parent = self.tree.parent(iid)
+            self.tree.delete(iid)
+            # Drop the dongle header too if it now has no visible trackers.
+            if parent and not self.tree.get_children(parent):
+                self.tree.delete(parent)
+                for d, node in list(self._dongle_nodes.items()):
+                    if node == parent:
+                        self._dongle_nodes.pop(d, None)
+        self._log_line("info",
+                       f"Device hidden and excluded from the data: {serial}")
+        self._refresh_hidden_indicator()
+
+    def _restore_hidden(self):
+        if self.mon:
+            self.mon.restore_all()
+            self._log_line("info", "Restored all hidden devices.")
+        self._refresh_hidden_indicator()
+
+    def _refresh_hidden_indicator(self, snap=None):
+        if snap is not None:
+            n = len(snap.get("dismissed", []))
+        elif self.mon:
+            n = len(self.mon.dismissed)
+        else:
+            n = 0
+        if n:
+            self.hidden_var.set(
+                f"Hidden devices: {n}  -  click to show them again")
+            self.hidden_btn.config(state="normal")
+        else:
+            self.hidden_var.set("")
+            self.hidden_btn.config(state="disabled")
 
     def _log_line(self, kind, msg, ts=None):
         stamp = (ts or datetime.now()).strftime("%H:%M:%S")

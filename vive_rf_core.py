@@ -370,24 +370,47 @@ def _is_tracked_class(cls):
                    openvr.TrackedDeviceClass_Controller)
 
 
-NAMES_FILE = "tracker_names.csv"
+# Plain .txt so a double-click opens Notepad - no Excel or Microsoft login.
+NAMES_FILE = "tracker_names.txt"
+LEGACY_NAMES_FILE = "tracker_names.csv"
+
+
+def _parse_names_text(lines):
+    """Parse 'serial = name' lines (also accepts comma/tab/colon)."""
+    names = {}
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        for sep in ("=", ",", "\t", ":"):
+            if sep in line:
+                serial, name = line.split(sep, 1)
+                break
+        else:
+            continue
+        serial, name = serial.strip(), name.strip()
+        if serial and name and serial.lower() != "serial":
+            names[serial] = name
+    return names
 
 
 def load_tracker_names(path=NAMES_FILE):
-    """Read a serial,name mapping the user maintains. Missing file is fine."""
-    names = {}
-    if not os.path.isfile(path):
-        return names
-    try:
-        with open(path, newline="", encoding="utf-8-sig") as f:
-            for row in csv.reader(f):
-                if len(row) >= 2 and row[0].strip().lower() != "serial":
-                    serial, name = row[0].strip(), row[1].strip()
-                    if serial and name:
-                        names[serial] = name
-    except Exception:
-        pass
-    return names
+    """Read a serial->name mapping the user maintains. Missing file is fine.
+
+    Falls back to the older tracker_names.csv if only that exists, so names
+    set up before the switch to .txt keep working.
+    """
+    candidates = [path]
+    if path == NAMES_FILE:
+        candidates.append(LEGACY_NAMES_FILE)
+    for p in candidates:
+        if p and os.path.isfile(p):
+            try:
+                with open(p, encoding="utf-8-sig") as f:
+                    return _parse_names_text(f)
+            except Exception:
+                return {}
+    return {}
 
 
 def write_tracker_names_template(path, serials, existing=None):
@@ -396,11 +419,13 @@ def write_tracker_names_template(path, serials, existing=None):
         return
     existing = existing or {}
     try:
-        with open(path, "w", newline="", encoding="utf-8") as f:
-            w = csv.writer(f)
-            w.writerow(["serial", "name"])
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("# Tracker names - edit this in Notepad and save.\n")
+            f.write("# One device per line:   SERIAL = friendly name\n")
+            f.write("# Lines starting with # are ignored; blank names are OK.\n")
+            f.write("\n")
             for s in serials:
-                w.writerow([s, existing.get(s, "")])
+                f.write(f"{s} = {existing.get(s, '')}\n")
     except Exception:
         pass
 
@@ -598,6 +623,12 @@ class RFMonitor(threading.Thread):
         self.paused_reason = ""
         self._idle_since = None
 
+        # Serials the operator has hidden as not relevant to this run (e.g.
+        # controllers used only for room setup). Hidden devices are excluded
+        # from the table, the stats/aggregates, the saved report, and the
+        # "all trackers off" idle check.
+        self.dismissed = set()
+
         self._vr = None
         self._csv_file = None
         self._csv_writer = None
@@ -763,8 +794,11 @@ class RFMonitor(threading.Thread):
                 })
             if not _is_tracked_class(cls):
                 continue
-            tracked_seen = True
-            tracked_connected = tracked_connected or connected
+            # Hidden devices (e.g. setup-only controllers) don't count towards
+            # the "all trackers off" idle check.
+            if self.index_serial.get(idx) not in self.dismissed:
+                tracked_seen = True
+                tracked_connected = tracked_connected or connected
             ok, state = self._vr.getControllerState(idx)
             packet_num = state.unPacketNum if ok else None
             battery = None
@@ -780,7 +814,8 @@ class RFMonitor(threading.Thread):
         # fault, so we stop counting these samples (immediately, so the grace
         # period never pollutes the report) and surface an idle state.
         headset_off = hmd_seen and not hmd_connected
-        trackers_known = tracked_seen or bool(self.trackers)
+        trackers_known = tracked_seen or any(
+            s not in self.dismissed for s in self.trackers)
         all_trackers_off = trackers_known and not tracked_connected
         raw_idle = headset_off or all_trackers_off
         if raw_idle:
@@ -817,10 +852,12 @@ class RFMonitor(threading.Thread):
                     if st is None:
                         continue
                     edge = st.update(poses[idx], packet_num, now, dt)
-                    if edge == "drop":
-                        dropped_by_dongle[st.dongle].append(st.serial)
-                    elif edge == "reconnect":
-                        reconnected.append((st.label_or_serial(), st.dongle))
+                    if st.serial not in self.dismissed:
+                        if edge == "drop":
+                            dropped_by_dongle[st.dongle].append(st.serial)
+                        elif edge == "reconnect":
+                            reconnected.append(
+                                (st.label_or_serial(), st.dongle))
                     if battery is not None:
                         st.battery = battery
 
@@ -915,7 +952,8 @@ class RFMonitor(threading.Thread):
         epoch = f"{now.timestamp():.3f}"
         with self._lock:
             pairs = [(st.to_row(), st.pop_window())
-                     for st in self.trackers.values()]
+                     for st in self.trackers.values()
+                     if st.serial not in self.dismissed]
         for r, w in pairs:
             self._csv_writer.writerow([
                 ts, epoch, self.site, r["serial"], r["name"],
@@ -950,10 +988,22 @@ class RFMonitor(threading.Thread):
         except Exception:
             pass
 
+    def dismiss(self, serial):
+        """Hide a device (by serial) as not relevant to this run."""
+        with self._lock:
+            self.dismissed.add(serial)
+
+    def restore_all(self):
+        """Un-hide every previously dismissed device."""
+        with self._lock:
+            self.dismissed.clear()
+
     def snapshot(self):
         """Thread-safe copy of current stats plus drained notifications."""
         with self._lock:
-            rows = [st.to_row() for st in self.trackers.values()]
+            rows = [st.to_row() for st in self.trackers.values()
+                    if st.serial not in self.dismissed]
+            dismissed = sorted(self.dismissed)
             notes = list(self.notifications)
             census = list(self.census)
             self.notifications.clear()
@@ -986,6 +1036,7 @@ class RFMonitor(threading.Thread):
             "class_counts": dict(class_counts),
             "paused": self.paused,
             "paused_reason": self.paused_reason,
+            "dismissed": dismissed,
         }
 
     def verdict_text(self):
