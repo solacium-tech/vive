@@ -420,7 +420,7 @@ def write_tracker_names_template(path, serials, existing=None):
     existing = existing or {}
     try:
         with open(path, "w", encoding="utf-8") as f:
-            f.write("# Tracker names - edit this in Notepad and save.\n")
+            f.write("# Tracker names. Edit this in Notepad and save.\n")
             f.write("# One device per line:   SERIAL = friendly name\n")
             f.write("# Lines starting with # are ignored; blank names are OK.\n")
             f.write("\n")

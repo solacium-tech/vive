@@ -62,7 +62,7 @@ GLYPHS = {
 
 def replace_screenshots(text):
     """Turn '*(Screenshot: `file.png` - caption)*' markers into <figure>s."""
-    pat = re.compile(r"\*\(Screenshot:\s*`([^`]+)`\s*[—-]\s*(.*?)\)\*",
+    pat = re.compile(r"\*\(Screenshot:\s*`([^`]+)`\s*[,—:-]?\s*(.*?)\)\*",
                      re.DOTALL)
 
     def sub(m):
