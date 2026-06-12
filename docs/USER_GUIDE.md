@@ -197,15 +197,16 @@ tools want); the `*_total` columns are cumulative since the run started.
 | `optical_loss_pct_total` | Cumulative optical (out of range) loss percentage. |
 | `drops_total`, `stalls_total` | Cumulative radio drops and stalls. |
 | `longest_disconnect_s` | Longest single radio dropout so far. |
-| `update_hz` | Recent input rate (see note below). |
+| `update_hz` | Input rate; blank for body trackers (see note below). |
 | `battery_pct` | Battery level, if reported. |
 
-> **About the update rate / "Updates per second" column.** It is derived from
-> the device's **input** packet counter, which only advances when something is
-> wired into the tracker's accessory pins (buttons, a trigger, and so on). A
-> bare Vive tracker sends no input, so this reads `n/a` even while it is tracking
-> perfectly. It does not affect the radio or lighthouse figures, which come from
-> the connection state, not this counter.
+> **About `update_hz`.** It is derived from the device's **input** packet
+> counter, which only advances when something is wired into the tracker's
+> accessory pins (buttons, a trigger, and so on). A bare Vive tracker sends no
+> input, so this stays blank even while it is tracking perfectly. For that
+> reason it is kept in the CSV only and is **not** shown in the live table, and
+> it never affects the radio or lighthouse figures, which come from the
+> connection state rather than this counter.
 
 ## 7. Acting on the results
 

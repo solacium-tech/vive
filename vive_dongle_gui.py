@@ -18,7 +18,7 @@ from tkinter import ttk, scrolledtext, messagebox
 import vive_rf_core as core
 
 APP_TITLE = "Vive Tracker Link Monitor"
-APP_VERSION = "2026-06-10i"   # shown in the title bar to confirm the build
+APP_VERSION = "2026-06-10j"   # shown in the title bar to confirm the build
 
 # fg / bg per severity
 SEV_STYLE = {
@@ -35,11 +35,10 @@ BANNER_STYLE = {
 HEADER_BG = "#263238"
 
 COLUMNS = (
-    ("radio",   "Radio link (to dongle)",        170, "w"),
-    ("drops",   "Radio drops",                    85, "center"),
-    ("optic",   "Lighthouse (line of sight)",    170, "w"),
-    ("rate",    "Updates/sec",                    90, "center"),
-    ("batt",    "Battery",                        70, "center"),
+    ("radio",   "Radio link (to dongle)",        180, "w"),
+    ("drops",   "Radio drops",                    90, "center"),
+    ("optic",   "Lighthouse (line of sight)",    180, "w"),
+    ("batt",    "Battery",                        75, "center"),
     ("link",    "Connected",                      90, "center"),
 )
 
@@ -528,7 +527,7 @@ class MonitorApp:
             d_vals = (f"{rf_word}  -  {a['recent_rf_loss_pct']:.2f}% lost",
                       a["dropouts"],
                       f"{op_word}  -  {a['recent_optical_loss_pct']:.2f}% lost",
-                      "", "", "")
+                      "", "")
             node = self._dongle_nodes.get(dongle)
             if node is None:
                 node = self.tree.insert("", "end", text=d_text, values=d_vals,
@@ -546,12 +545,9 @@ class MonitorApp:
                 # link clears within ~30s instead of staying red all session.
                 rf_word, _ = core.rf_verdict(r["recent_rf_loss_pct"])
                 op_word, _ = core.optical_verdict(r["recent_optical_loss_pct"])
-                hz = ("n/a" if r["update_hz"] is None
-                      else f"{r['update_hz']:.0f}")
                 vals = (f"{rf_word}  -  {r['recent_rf_loss_pct']:.2f}% lost",
                         r["disconnect_events"],
                         f"{op_word}  -  {r['recent_optical_loss_pct']:.2f}% lost",
-                        hz,
                         batt,
                         "Up" if r["connected"] else "DOWN")
                 name = r.get("name")
