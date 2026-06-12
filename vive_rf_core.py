@@ -45,6 +45,15 @@ STALL_MS = 60               # connected but no new input packet -> stall
 # the full-session figures.
 RECENT_WINDOW_S = 30
 
+# "Not in use" detection. When the operator has stopped - the headset is off,
+# or every tracker is powered down - their disconnection is not a radio fault,
+# so we pause: those samples are not counted against the loss figures and the
+# UI shows an idle state instead of flagging everything as failing. The pause
+# is confirmed only after the condition has held for IDLE_GRACE_S, to ignore
+# momentary blips, but counting stops immediately so the grace period never
+# pollutes the report.
+IDLE_GRACE_S = 3.0
+
 # Classification thresholds (percent)
 RF_LOSS_WARN = 0.5
 RF_LOSS_CRIT = 2.0
@@ -584,6 +593,11 @@ class RFMonitor(threading.Thread):
         self.started_at = None
         self.stopped_at = None
 
+        # "Not in use" / paused state (headset or all trackers off).
+        self.paused = False
+        self.paused_reason = ""
+        self._idle_since = None
+
         self._vr = None
         self._csv_file = None
         self._csv_writer = None
@@ -722,10 +736,18 @@ class RFMonitor(threading.Thread):
         # so the UI thread is never blocked on slow IPC property reads.
         census = [] if do_census else None
         updates = []   # (idx, packet_num, battery) for tracked devices
+        hmd_seen = False
+        hmd_connected = False
+        tracked_seen = False
+        tracked_connected = False
         for idx in range(openvr.k_unMaxTrackedDeviceCount):
             cls = self._vr.getTrackedDeviceClass(idx)
             if cls == openvr.TrackedDeviceClass_Invalid:
                 continue
+            connected = bool(poses[idx].bDeviceIsConnected)
+            if cls == openvr.TrackedDeviceClass_HMD:
+                hmd_seen = True
+                hmd_connected = hmd_connected or connected
             if do_census:
                 census.append({
                     "index": idx,
@@ -737,10 +759,12 @@ class RFMonitor(threading.Thread):
                     "dongle": _get_str(
                         self._vr, idx,
                         openvr.Prop_ConnectedWirelessDongle_String),
-                    "connected": bool(poses[idx].bDeviceIsConnected),
+                    "connected": connected,
                 })
             if not _is_tracked_class(cls):
                 continue
+            tracked_seen = True
+            tracked_connected = tracked_connected or connected
             ok, state = self._vr.getControllerState(idx)
             packet_num = state.unPacketNum if ok else None
             battery = None
@@ -751,20 +775,54 @@ class RFMonitor(threading.Thread):
                     battery = b * 100.0
             updates.append((idx, packet_num, battery))
 
+        # "Not in use": the headset is off, or every tracker is powered off.
+        # Either way the disconnection is the operator stopping, not a radio
+        # fault, so we stop counting these samples (immediately, so the grace
+        # period never pollutes the report) and surface an idle state.
+        headset_off = hmd_seen and not hmd_connected
+        trackers_known = tracked_seen or bool(self.trackers)
+        all_trackers_off = trackers_known and not tracked_connected
+        raw_idle = headset_off or all_trackers_off
+        if raw_idle:
+            parts = []
+            if headset_off:
+                parts.append("headset off")
+            if all_trackers_off:
+                parts.append("all trackers off")
+            reason = " and ".join(parts)
+            if self._idle_since is None:
+                self._idle_since = now
+            confirmed = (now - self._idle_since) >= IDLE_GRACE_S
+        else:
+            reason = ""
+            confirmed = False
+            self._idle_since = None
+
         dropped_by_dongle = defaultdict(list)
         reconnected = []
         with self._lock:
-            for idx, packet_num, battery in updates:
-                st = self._ensure_tracker(idx, now)
-                if st is None:
-                    continue
-                edge = st.update(poses[idx], packet_num, now, dt)
-                if edge == "drop":
-                    dropped_by_dongle[st.dongle].append(st.serial)
-                elif edge == "reconnect":
-                    reconnected.append((st.label_or_serial(), st.dongle))
-                if battery is not None:
-                    st.battery = battery
+            if raw_idle:
+                # Keep each tracker's state in sync but do not fold these
+                # samples in, and raise no drop alarms.
+                for idx, packet_num, battery in updates:
+                    st = self._ensure_tracker(idx, now)
+                    if st is None:
+                        continue
+                    st.was_connected = bool(poses[idx].bDeviceIsConnected)
+                    if battery is not None:
+                        st.battery = battery
+            else:
+                for idx, packet_num, battery in updates:
+                    st = self._ensure_tracker(idx, now)
+                    if st is None:
+                        continue
+                    edge = st.update(poses[idx], packet_num, now, dt)
+                    if edge == "drop":
+                        dropped_by_dongle[st.dongle].append(st.serial)
+                    elif edge == "reconnect":
+                        reconnected.append((st.label_or_serial(), st.dongle))
+                    if battery is not None:
+                        st.battery = battery
 
             if census is not None:
                 self.census = census
@@ -806,6 +864,20 @@ class RFMonitor(threading.Thread):
             self._notify("info",
                          f"RECONNECTED: radio link restored - {label} "
                          f"(dongle {dongle})")
+
+        # Pause/resume transitions (announced only after the grace window so
+        # the event log records the gap instead of a flurry of false drops).
+        if raw_idle and confirmed:
+            if not self.paused:
+                self.paused = True
+                self._notify("info",
+                             f"PAUSED: {reason} - operator not using the rig; "
+                             f"monitoring paused (this time is not counted)")
+            self.paused_reason = reason
+        elif not raw_idle and self.paused:
+            self.paused = False
+            self.paused_reason = ""
+            self._notify("info", "RESUMED: activity detected - monitoring")
 
     def _open_logs(self):
         if not self.enable_log:
@@ -912,6 +984,8 @@ class RFMonitor(threading.Thread):
             "elapsed": elapsed,
             "census": census,
             "class_counts": dict(class_counts),
+            "paused": self.paused,
+            "paused_reason": self.paused_reason,
         }
 
     def verdict_text(self):

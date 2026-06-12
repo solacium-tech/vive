@@ -93,6 +93,13 @@ poses/area you care about) before stopping.
 > (next step) uses the **full-session** figures, which is what you want for
 > comparing runs.
 
+> **"Not in use" is not a fault.** If the **headset is switched off** or **all
+> trackers are powered down**, the app treats it as the operator stopping
+> rather than a radio problem: the run-state chip shows **PAUSED (not in use)**,
+> the banner goes grey, and that idle time is **not counted** against the loss
+> figures. Put the headset back on or power a tracker and it resumes
+> automatically.
+
 ---
 
 ## Step 3 — Stop and save the report

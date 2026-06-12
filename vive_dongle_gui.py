@@ -8,6 +8,7 @@ Sampling and statistics live in vive_rf_core; this module is display only.
 Requires SteamVR running locally. No network access is used.
 """
 
+import glob
 import os
 import subprocess
 from datetime import datetime
@@ -17,7 +18,7 @@ from tkinter import ttk, scrolledtext, messagebox
 import vive_rf_core as core
 
 APP_TITLE = "Vive Tracker Link Monitor"
-APP_VERSION = "2026-06-10f"   # shown in the title bar to confirm the build
+APP_VERSION = "2026-06-10g"   # shown in the title bar to confirm the build
 
 # fg / bg per severity
 SEV_STYLE = {
@@ -247,7 +248,11 @@ class MonitorApp:
             self.mon.stop()
             self.mon.join(timeout=5)
             self.log_dir = os.path.abspath(self.mon.log_dir)
-            self.report_path = getattr(self.mon, "report_path", None)
+            # Store an absolute path: a relative one can fail os.path.isfile()
+            # later (that was why "Open report" claimed no report existed even
+            # though the file was sitting in the reports folder).
+            rp = getattr(self.mon, "report_path", None)
+            self.report_path = os.path.abspath(rp) if rp else None
             snap = self.mon.snapshot()
         except Exception as exc:
             self._log_line("alert", f"Error while stopping: {exc}")
@@ -375,8 +380,21 @@ class MonitorApp:
             return
         self._open_file(path)
 
+    def _newest_report(self):
+        """Most recent *_report.txt in the reports folder, or None."""
+        folder = getattr(self, "log_dir", os.path.abspath("logs"))
+        try:
+            reports = glob.glob(os.path.join(folder, "*_report.txt"))
+            return max(reports, key=os.path.getmtime) if reports else None
+        except Exception:
+            return None
+
     def _open_report(self):
         report = getattr(self, "report_path", None)
+        # Fall back to the newest report on disk if the tracked path is missing
+        # (e.g. it was written a moment after Stop, or the path was relative).
+        if not (report and os.path.isfile(report)):
+            report = self._newest_report()
         if report and os.path.isfile(report):
             self._open_file(os.path.abspath(report))
         else:
@@ -391,6 +409,11 @@ class MonitorApp:
             snap = self.mon.snapshot()
             self._update_table(snap)
             self._update_banner(snap)
+            # Reflect the paused ("not in use") state in the run-state chip.
+            if snap.get("paused"):
+                self._set_chip("❚❚ PAUSED (not in use)", "#607d8b")
+            else:
+                self._set_chip("● MONITORING", "#2e7d32")
             for ts, kind, msg in snap["notifications"]:
                 self._log_line(kind, msg, ts)
             self.elapsed_var.set(f"Running for {snap['elapsed']:.0f}s   |   "
@@ -398,6 +421,13 @@ class MonitorApp:
         self.root.after(500, self._tick)
 
     def _update_banner(self, snap):
+        if snap.get("paused"):
+            reason = snap.get("paused_reason") or "not in use"
+            self._set_banner("idle",
+                             f"NOT IN USE ({reason}). Monitoring paused - this "
+                             f"time is not counted. Put the headset on or power "
+                             f"the trackers to resume.")
+            return
         if not snap["rows"]:
             counts = snap.get("class_counts", {})
             if counts:
