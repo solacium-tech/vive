@@ -18,7 +18,7 @@ from tkinter import ttk, scrolledtext, messagebox
 import vive_rf_core as core
 
 APP_TITLE = "Vive Tracker Link Monitor"
-APP_VERSION = "2026-06-10m"   # shown in the title bar to confirm the build
+APP_VERSION = "2026-06-10n"   # shown in the title bar to confirm the build
 
 # fg / bg per severity
 SEV_STYLE = {
