@@ -18,6 +18,7 @@ Front-ends: vive_dongle_monitor.py (console), vive_dongle_gui.py (GUI).
 """
 
 import csv
+import ctypes
 import os
 import textwrap
 import threading
@@ -127,6 +128,8 @@ class TrackerStat:
         # radio data. A heuristic for a starved/marginal link.
         self.stale_events = 0
         self.stale_samples = 0
+        # dongle-level wireless link drops, from SteamVR's own events
+        self.wireless_disconnect_events = 0
         self._last_pose_key = None
         self._last_pose_change = None
         self._in_stale = False
@@ -385,6 +388,7 @@ class TrackerStat:
             "stall_events": self.stall_events,
             "stale_events": self.stale_events,
             "stale_pct": self.stale_pct,
+            "wireless_disconnect_events": self.wireless_disconnect_events,
             "longest_disconnect_s": self.longest_disconnect_s,
             "connected": self.was_connected,
             "first_issue_time": self.first_issue_time,
@@ -718,6 +722,7 @@ class RFMonitor(threading.Thread):
         self.dismissed = set()
 
         self._vr = None
+        self._vrevent = None      # reused VREvent_t buffer for event polling
         self._csv_file = None
         self._csv_writer = None
         self._event_file = None
@@ -846,10 +851,37 @@ class RFMonitor(threading.Thread):
                             f"name={st.name or '-'}")
         return st
 
+    def _drain_vr_events(self):
+        """Drain SteamVR's event queue and return dongle-level wireless link
+        events as (kind, device_index), kind being 'wireless_disconnect' or
+        'wireless_reconnect'. The queue must be drained every tick regardless,
+        or it backs up. Best-effort: silently no-ops on runtimes that don't
+        expose these events.
+        """
+        out = []
+        try:
+            ev = self._vrevent
+            if ev is None:
+                ev = self._vrevent = openvr.VREvent_t()
+            disc = getattr(openvr, "VREvent_WirelessDisconnect", None)
+            recon = getattr(openvr, "VREvent_WirelessReconnect", None)
+            size = ctypes.sizeof(openvr.VREvent_t)
+            while self._vr.pollNextEvent(ev, size):
+                if disc is not None and ev.eventType == disc:
+                    out.append(("wireless_disconnect", ev.trackedDeviceIndex))
+                elif recon is not None and ev.eventType == recon:
+                    out.append(("wireless_reconnect", ev.trackedDeviceIndex))
+        except Exception:
+            pass
+        return out
+
     def _sample(self, now, dt, read_batt, do_census):
         poses = self._vr.getDeviceToAbsoluteTrackingPose(
             openvr.TrackingUniverseRawAndUncalibrated, 0,
             openvr.k_unMaxTrackedDeviceCount)
+
+        # Drain SteamVR's event queue for dongle-level wireless link events.
+        wireless_events = self._drain_vr_events()
 
         # Gather all per-device SteamVR data first, without holding our lock,
         # so the UI thread is never blocked on slow IPC property reads.
@@ -1009,6 +1041,27 @@ class RFMonitor(threading.Thread):
                          f"stopped updating for >{STALE_FREEZE_MS / 1000:.1f}s "
                          f"- possible radio starvation or 2.4GHz interference "
                          f"(dongle {dongle})")
+        # Dongle-level wireless link events from SteamVR. These are logged in
+        # addition to (not instead of) the polled connection metrics, and are
+        # suppressed while the rig is paused (devices powering down).
+        if not self.paused:
+            for kind, dev_idx in wireless_events:
+                serial = self.index_serial.get(dev_idx)
+                if serial is None or serial in self.dismissed:
+                    continue
+                st = self.trackers.get(serial)
+                label = st.label_or_serial() if st else serial
+                dongle = st.dongle if st else "?"
+                if kind == "wireless_disconnect":
+                    if st is not None:
+                        st.wireless_disconnect_events += 1
+                    self._notify("alert",
+                                 f"WIRELESS DROP: {label} lost its dongle radio "
+                                 f"link (dongle {dongle})")
+                else:
+                    self._notify("info",
+                                 f"WIRELESS OK: {label} dongle radio link "
+                                 f"restored (dongle {dongle})")
 
         # Pause/resume transitions (announced only after the grace window so
         # the event log records the gap instead of a flurry of false drops).
@@ -1047,6 +1100,7 @@ class RFMonitor(threading.Thread):
             "drops_total", "stalls_total", "longest_disconnect_s",
             "update_hz", "battery_pct",
             "not_updating_pct_total", "not_updating_events_total",
+            "wireless_drops_total",
         ])
         self._event_file = open(evt_path, "w", encoding="utf-8")
         self._event_file.write(
@@ -1075,6 +1129,7 @@ class RFMonitor(threading.Thread):
                 f"{r['update_hz']:.1f}" if r["update_hz"] is not None else "",
                 f"{r['battery']:.0f}" if r["battery"] is not None else "",
                 f"{r['stale_pct']:.3f}", r["stale_events"],
+                r["wireless_disconnect_events"],
             ])
         self._csv_file.flush()
 
