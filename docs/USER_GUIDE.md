@@ -21,7 +21,9 @@ failure modes, and never lets them overlap:
   placement.
 - **Lighthouse (optical)** is the line of sight between a tracker and the **base
   stations**. It counts (only while the radio link is up) when the tracker is
-  connected but out of range. An optical problem points at **occlusion or
+  connected but cannot get a clean optical fix: out of range, running on its IMU
+  only (position lost), or reporting an invalid pose. A foot tracker covered by
+  clothing is a typical cause. An optical problem points at **occlusion or
   range** to the base stations, not the dongle.
 
 Each tracker is mapped to the dongle it is paired with, so results can be

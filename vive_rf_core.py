@@ -6,7 +6,8 @@ and per-dongle link statistics. Two failure modes are tracked separately:
 
   - radio:   pose.bDeviceIsConnected false, or input packet counter stalls
              (problem between tracker and its USB dongle)
-  - optical: connected but TrackingResult_Running_OutOfRange
+  - optical: connected but the pose isn't a clean optical fix - out of range,
+             rotation-only (position lost to IMU), or an invalid pose
              (problem between tracker and the base stations)
 
 Optical loss is only accumulated while the radio link is up, so the two
@@ -171,7 +172,15 @@ class TrackerStat:
             self.connected_elapsed_s += dt
             if pose.bPoseIsValid:
                 self.pose_valid_samples += 1
-            if pose.eTrackingResult == openvr.TrackingResult_Running_OutOfRange:
+            # Optical / line-of-sight loss while the radio link is up. As well
+            # as the hard "out of range" state, this now counts position lost to
+            # IMU-only (rotation-only fallback) and any invalid pose - e.g. a
+            # foot tracker partly covered by clothing, where SteamVR keeps the
+            # device connected but can no longer get a clean optical fix.
+            pose_ok = (pose.bPoseIsValid
+                       and pose.eTrackingResult
+                       == openvr.TrackingResult_Running_OK)
+            if not pose_ok:
                 self.out_of_range_samples += 1
                 self.win_oor += 1
                 oor = True
