@@ -93,6 +93,14 @@ The colour, and which **side** it is on, tells you where to look:
 Let the session run long enough to be representative. Move the rig through the
 poses and the area you actually care about before stopping.
 
+> **Watch the Event log for "NOT UPDATING".** If a tracker stays connected but
+> its pose stops changing, the app raises a `NOT UPDATING` alert. That usually
+> means the radio link is starved rather than cleanly dropped, which points at
+> **2.4GHz interference** (for example dongles plugged straight into the
+> workstation or a USB 3.0 hub). It is a best-effort heuristic, not a hard
+> fault, but it is a strong hint to move that dongle onto an extension, away
+> from the PC.
+
 > **Live figures are "right now", not the whole run.** The colours and the
 > "% lost" in the table reflect roughly the **last 30 seconds**, so a tracker
 > moved back into range clears from red to green within about 30 seconds instead
@@ -201,6 +209,8 @@ tools want); the `*_total` columns are cumulative since the run started.
 | `longest_disconnect_s` | Longest single radio dropout so far. |
 | `update_hz` | Input rate; blank for body trackers (see note below). |
 | `battery_pct` | Battery level, if reported. |
+| `not_updating_pct_total` | % of connected time the pose was frozen (see note). |
+| `not_updating_events_total` | How many times the pose froze while connected. |
 
 > **About `update_hz`.** It is derived from the device's **input** packet
 > counter, which only advances when something is wired into the tracker's

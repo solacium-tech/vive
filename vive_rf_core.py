@@ -37,6 +37,13 @@ CSV_PERIOD_S = 1.0
 BATTERY_PERIOD_S = 5.0
 CENSUS_PERIOD_S = 1.0       # how often the full device census is rebuilt
 STALL_MS = 60               # connected but no new input packet -> stall
+# Connected and nominally tracking, but the pose is bit-for-bit frozen for
+# longer than this: the host has stopped getting fresh radio updates even though
+# the device hasn't formally disconnected. A heuristic for a starved/marginal
+# radio link (e.g. 2.4GHz interference from a nearby workstation/USB3). A
+# healthy tracker - even a still one - always shows tiny IMU/optical jitter, so
+# a long freeze is the tell. Generous threshold to avoid false positives.
+STALE_FREEZE_MS = 400
 
 # The live view answers "is this link OK right now", so its colours and
 # percentages are computed over a recent rolling window rather than the whole
@@ -115,6 +122,16 @@ class TrackerStat:
         self.stall_events = 0
         self._in_stall = False
 
+        # pose-freeze ("not updating") detection: connected and nominally
+        # tracking, but the pose stops changing -> host is not receiving fresh
+        # radio data. A heuristic for a starved/marginal link.
+        self.stale_events = 0
+        self.stale_samples = 0
+        self._last_pose_key = None
+        self._last_pose_change = None
+        self._in_stale = False
+        self._stale_edge = False
+
         # per-CSV-interval window counters (reset on every CSV row)
         self.win_samples = 0
         self.win_connected = 0
@@ -185,6 +202,27 @@ class TrackerStat:
                 self.win_oor += 1
                 oor = True
 
+            # Pose-freeze detection: only meaningful while the device claims to
+            # be tracking fine. A frozen pose then means the radio data stopped.
+            if pose_ok:
+                key = _pose_key(pose)
+                if key is None or key != self._last_pose_key:
+                    self._last_pose_key = key
+                    self._last_pose_change = now
+                    self._in_stale = False
+                elif (self._last_pose_change is not None
+                      and (now - self._last_pose_change) * 1000.0
+                      > STALE_FREEZE_MS):
+                    self.stale_samples += 1
+                    if not self._in_stale:
+                        self.stale_events += 1
+                        self._in_stale = True
+                        self._stale_edge = True
+                        self._mark_issue(now, "stale")
+            else:
+                self._last_pose_key = None
+                self._in_stale = False
+
             if packet_num is not None:
                 if self.last_packet is None:
                     self.last_packet = packet_num
@@ -208,6 +246,8 @@ class TrackerStat:
         else:
             self.rf_loss_samples += 1
             self.win_rf_loss += 1
+            self._last_pose_key = None
+            self._in_stale = False
 
         if not connected and self.was_connected:
             self.in_disconnect = True
@@ -284,6 +324,12 @@ class TrackerStat:
         return 100.0 * self.out_of_range_samples / c if c else 0.0
 
     @property
+    def stale_pct(self):
+        """% of connected time the pose was frozen (not updating)."""
+        c = self.connected_samples
+        return 100.0 * self.stale_samples / c if c else 0.0
+
+    @property
     def update_hz(self):
         # Unknown if the device never advances its packet counter.
         if not self.packet_ever_advanced or self.connected_elapsed_s <= 0.2:
@@ -337,6 +383,8 @@ class TrackerStat:
             "battery": self.battery,
             "disconnect_events": self.disconnect_events,
             "stall_events": self.stall_events,
+            "stale_events": self.stale_events,
+            "stale_pct": self.stale_pct,
             "longest_disconnect_s": self.longest_disconnect_s,
             "connected": self.was_connected,
             "first_issue_time": self.first_issue_time,
@@ -437,6 +485,21 @@ def write_tracker_names_template(path, serials, existing=None):
                 f.write(f"{s} = {existing.get(s, '')}\n")
     except Exception:
         pass
+
+
+def _pose_key(pose):
+    """A hashable snapshot of the device's pose matrix, or None if unreadable.
+
+    Used to detect a frozen (non-updating) pose: identical keys across samples
+    mean the host received no new data for that device.
+    """
+    try:
+        m = pose.mDeviceToAbsoluteTracking
+        return (m[0][0], m[0][1], m[0][2], m[0][3],
+                m[1][0], m[1][1], m[1][2], m[1][3],
+                m[2][0], m[2][1], m[2][2], m[2][3])
+    except Exception:
+        return None
 
 
 def _hmd_worn(vr, idx):
@@ -869,6 +932,7 @@ class RFMonitor(threading.Thread):
 
         dropped_by_dongle = defaultdict(list)
         reconnected = []
+        stale_started = []
         with self._lock:
             if raw_idle:
                 # Keep each tracker's state in sync but do not fold these
@@ -891,6 +955,10 @@ class RFMonitor(threading.Thread):
                             dropped_by_dongle[st.dongle].append(st.serial)
                         elif edge == "reconnect":
                             reconnected.append(
+                                (st.label_or_serial(), st.dongle))
+                        if st._stale_edge:
+                            st._stale_edge = False
+                            stale_started.append(
                                 (st.label_or_serial(), st.dongle))
                     if battery is not None:
                         st.battery = battery
@@ -935,6 +1003,12 @@ class RFMonitor(threading.Thread):
             self._notify("info",
                          f"RECONNECTED: radio link restored - {label} "
                          f"(dongle {dongle})")
+        for label, dongle in stale_started:
+            self._notify("alert",
+                         f"NOT UPDATING: {label} is connected but its pose "
+                         f"stopped updating for >{STALE_FREEZE_MS / 1000:.1f}s "
+                         f"- possible radio starvation or 2.4GHz interference "
+                         f"(dongle {dongle})")
 
         # Pause/resume transitions (announced only after the grace window so
         # the event log records the gap instead of a flurry of false drops).
@@ -972,6 +1046,7 @@ class RFMonitor(threading.Thread):
             "rf_loss_pct_total", "optical_loss_pct_total",
             "drops_total", "stalls_total", "longest_disconnect_s",
             "update_hz", "battery_pct",
+            "not_updating_pct_total", "not_updating_events_total",
         ])
         self._event_file = open(evt_path, "w", encoding="utf-8")
         self._event_file.write(
@@ -999,6 +1074,7 @@ class RFMonitor(threading.Thread):
                 f"{r['longest_disconnect_s']:.2f}",
                 f"{r['update_hz']:.1f}" if r["update_hz"] is not None else "",
                 f"{r['battery']:.0f}" if r["battery"] is not None else "",
+                f"{r['stale_pct']:.3f}", r["stale_events"],
             ])
         self._csv_file.flush()
 
