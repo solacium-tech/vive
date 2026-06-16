@@ -51,6 +51,7 @@ if errorlevel 1 (
 
 echo   - SteamVR probe build...
 pyinstaller --onefile --console --name steamvr_probe ^
+    --paths . --hidden-import lighthouse_stats ^
     --collect-all openvr ^
     tools\steamvr_probe.py
 if errorlevel 1 (

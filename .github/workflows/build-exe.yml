@@ -37,6 +37,7 @@ jobs:
       - name: Build SteamVR probe executable
         run: >
           pyinstaller --onefile --console --name steamvr_probe
+          --paths . --hidden-import lighthouse_stats
           --collect-all openvr tools/steamvr_probe.py
 
       - name: Upload executables
