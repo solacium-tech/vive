@@ -28,12 +28,27 @@ Output is written to logs/steamvr_probe_<timestamp>.txt next to this script.
 import argparse
 import datetime
 import os
+import re
 import subprocess
 import sys
 
-# The ONLY commands this probe will ever send to lighthouse_console. Both are
-# pure discovery/read. Do not add write/update/channel/pair commands here.
-ALLOWED_CONSOLE_COMMANDS = ["help", "?"]
+# The ONLY command first-tokens this probe will ever send to lighthouse_console.
+# Every one is read-only (prints/dumps state). Destructive commands seen in the
+# menu - reboot, poweroff, isp, uploadconfig, haptic, associatecontroller,
+# clear, save, record, trackpadcalibrate, etc. - are deliberately excluded and
+# must never be added here.
+# Run once per selected device.
+SAFE_READ_COMMANDS = [
+    "version",      # firmware/hardware version
+    "battery",      # battery status
+    "errors",       # lighthouse error/status structure
+    "usbstats",     # one-time USB packet-rate stats (incremental-loss signal)
+    "sensorcheck",  # hits/widths per optical sensor (dead-zone signal)
+    "imustats",     # IMU statistics
+    "period",       # sync statistics
+]
+ALLOWED_FIRST_TOKENS = set(SAFE_READ_COMMANDS) | {
+    "help", "?", "deviceinfo", "serial", "quit", "exit"}
 
 # Optional, experimental, read-ish strings for IVRSystem::DriverDebugRequest.
 # The lighthouse driver decides what these mean; unknown ones typically return
@@ -118,11 +133,16 @@ def find_lighthouse_console(explicit=None):
     return None
 
 
-def run_lighthouse_console(path, timeout=30):
-    """Launch the console, send ONLY whitelisted read commands, capture output."""
-    # Commands are piped via stdin; we always finish with quit AND exit so the
-    # process terminates regardless of which keyword this version uses.
-    script = "\n".join(ALLOWED_CONSOLE_COMMANDS + ["quit", "exit", ""])
+def console_session(path, commands, timeout=60):
+    """Launch lighthouse_console once, send `commands` (whitelisted) via stdin,
+    capture output. Always appends quit AND exit so it terminates regardless of
+    which keyword this version uses."""
+    for c in commands:
+        token = c.split()[0] if c.strip() else ""
+        if token and token not in ALLOWED_FIRST_TOKENS:
+            # Hard guard: refuse to ever emit a non-whitelisted command.
+            raise ValueError(f"refusing non-whitelisted command: {c!r}")
+    script = "\n".join(list(commands) + ["quit", "exit", ""])
     try:
         proc = subprocess.run(
             [path], input=script, capture_output=True, text=True,
@@ -130,12 +150,60 @@ def run_lighthouse_console(path, timeout=30):
         return (proc.stdout or "") + ("\n[stderr]\n" + proc.stderr
                                       if proc.stderr else "")
     except subprocess.TimeoutExpired as e:
-        out = (e.stdout or "")
+        out = e.stdout or ""
         if isinstance(out, bytes):
             out = out.decode("utf-8", "ignore")
         return out + f"\n[probe] timed out after {timeout}s (process killed)"
     except Exception as exc:
         return f"[probe] failed to run lighthouse_console: {exc}"
+
+
+def parse_device_serials(banner):
+    """Pull the attached-receiver serial list out of the launch banner."""
+    serials = []
+    grabbing = False
+    for line in banner.splitlines():
+        if "Attached lighthouse receiver devices" in line:
+            grabbing = True
+            continue
+        if grabbing:
+            s = line.strip()
+            if not s:
+                continue
+            if not line[:1].isspace():
+                break  # left the indented device list
+            # Serials are indented alnum/dash tokens that always contain a
+            # digit (e.g. 6D25A40A5C, LHR-065846B2, 08E7C183C7-RYB).
+            if re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z-]{5,}", s) and \
+                    any(c.isdigit() for c in s):
+                serials.append(s)
+    return serials
+
+
+def build_capture_script(serials):
+    """Read-only command sequence: per-device stats for every receiver."""
+    cmds = ["help", "deviceinfo"]
+    if serials:
+        for s in serials:
+            cmds.append(f"serial {s}")
+            cmds.extend(SAFE_READ_COMMANDS)
+    else:
+        # Couldn't parse the list; just probe whatever device auto-connected.
+        cmds.extend(SAFE_READ_COMMANDS)
+    return cmds
+
+
+def run_lighthouse_console(path, timeout=90):
+    """Capture the banner, then read-only per-device stats."""
+    banner = console_session(path, [], timeout=30)
+    serials = parse_device_serials(banner)
+    script = build_capture_script(serials)
+    out = [f"[probe] parsed {len(serials)} device serial(s): "
+           f"{', '.join(serials) or '(none)'}",
+           f"[probe] read-only commands per device: {SAFE_READ_COMMANDS}",
+           "--- session output ---",
+           console_session(path, script, timeout=timeout)]
+    return "\n".join(out)
 
 
 def probe_driver_debug():
@@ -182,7 +250,7 @@ def main():
     ap.add_argument("--console", help="path to lighthouse_console.exe")
     ap.add_argument("--driver-debug", action="store_true",
                     help="also try OpenVR DriverDebugRequest (experimental)")
-    ap.add_argument("--timeout", type=int, default=30)
+    ap.add_argument("--timeout", type=int, default=120)
     args = ap.parse_args()
 
     out = []
@@ -200,7 +268,6 @@ def main():
     out.append("\n=== lighthouse_console ===")
     if console:
         out.append(f"found: {console}")
-        out.append(f"sending read-only commands: {ALLOWED_CONSOLE_COMMANDS}")
         out.append("--- output ---")
         out.append(run_lighthouse_console(console, args.timeout))
     else:
