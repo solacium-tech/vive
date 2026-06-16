@@ -119,6 +119,40 @@ def console_session(path, commands, timeout=60):
         return f"[probe] failed to run lighthouse_console: {exc}"
 
 
+def load_names(*dirs):
+    """Read tracker_names.txt (or legacy .csv) -> {serial: friendly name}.
+
+    The tracker serials lighthouse_console reports (e.g. LHR-CFD3E94B) are the
+    same serials used in the names file, so the mapping lines up directly.
+    """
+    names = {}
+    for d in dirs:
+        for fn in ("tracker_names.txt", "tracker_names.csv"):
+            p = os.path.join(d or ".", fn)
+            if not os.path.isfile(p):
+                continue
+            try:
+                with open(p, encoding="utf-8-sig") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+                        for sep in ("=", ",", "\t", ":"):
+                            if sep in line:
+                                k, v = line.split(sep, 1)
+                                break
+                        else:
+                            continue
+                        k, v = k.strip(), v.strip()
+                        if k and v and k.lower() != "serial":
+                            names[k] = v
+            except Exception:
+                pass
+            if names:
+                return names
+    return names
+
+
 def parse_device_serials(banner):
     """Pull the attached-receiver serial list out of the launch banner."""
     serials = []
@@ -178,14 +212,20 @@ def _device_blocks(raw):
     return blocks
 
 
-def summarize(raw):
-    """Turn the raw capture into a compact per-receiver health table."""
+def summarize(raw, names=None):
+    """Turn the raw capture into a compact per-receiver health table.
+
+    `names` maps tracker serial -> friendly name (from tracker_names.txt) so the
+    table is readable and setup-only controllers are obvious at a glance.
+    """
+    names = names or {}
     rows = []
     for dongle, text in _device_blocks(raw):
         tracker = ""
         mt = re.search(r"(LHR-[0-9A-Fa-f]+): Connected to receiver", text)
         if mt:
             tracker = mt.group(1)
+        name = names.get(tracker, "") or names.get(dongle, "")
         batt = (re.search(r"battery \([^)]*\):\s*(\d+)", text) or [None, "?"])[1]
         imu = re.search(r"rate ([\d.]+)Hz interval [\d.]+ms sigma ([\d.]+)ms",
                         text)
@@ -193,10 +233,10 @@ def summarize(raw):
         imu_sigma = imu.group(2) if imu else "?"
         # nonzero error counters
         errs = []
-        for name in ERROR_NAMES:
-            m = re.search(rf"{name}\s*:\s*(\d+)", text)
+        for ename in ERROR_NAMES:
+            m = re.search(rf"{ename}\s*:\s*(\d+)", text)
             if m and int(m.group(1)) > 0:
-                errs.append(f"{name}={m.group(1)}")
+                errs.append(f"{ename}={m.group(1)}")
         # sensor hits: take the table with the most rows seeing light
         best_total = best_hit = 0
         for tbl in re.split(r"SensorID\s+HitCount", text)[1:]:
@@ -214,8 +254,8 @@ def summarize(raw):
         usb = re.findall(r"\b(IMU|Optical|VrController)\b[^\n]*?([\d.]+)\s*/?s",
                          text)
         usb_str = ", ".join(f"{k}={v}" for k, v in usb) or "measuring/none"
-        rows.append((dongle, tracker, f"{batt}%", imu_hz, imu_sigma,
-                     sensors, usb_str, ", ".join(errs) or "none"))
+        rows.append((dongle, tracker, name or "-", f"{batt}%", imu_hz,
+                     imu_sigma, sensors, usb_str, ", ".join(errs) or "none"))
 
     # The device auto-connected at launch yields a duplicate, sparser row;
     # keep the last (fullest) row per dongle, preserving first-seen order.
@@ -226,7 +266,7 @@ def summarize(raw):
         dedup[r[0]] = r
     rows = [dedup[k] for k in order]
 
-    head = ("dongle", "tracker", "batt", "imuHz", "imuSig",
+    head = ("dongle", "tracker", "name", "batt", "imuHz", "imuSig",
             "sens(hit/seen)", "usb_rate", "nonzero_errors")
     widths = [max(len(str(r[i])) for r in [head] + rows) for i in range(len(head))]
     fmt = "  ".join(f"{{:<{w}}}" for w in widths)
@@ -234,20 +274,22 @@ def summarize(raw):
              fmt.format(*head)]
     lines += [fmt.format(*map(str, r)) for r in rows]
     lines.append("")
-    lines.append("notes: low sens(hit/seen) = optical dead zone/occlusion; "
-                 "low imuHz or high imuSig = jittery/starved link; any "
-                 "nonzero_errors worth investigating.")
+    lines.append("notes: this table is informational, not an auto-alarm. "
+                 "Low sens(hit/seen) = optical dead zone/occlusion; low imuHz "
+                 "or high imuSig = jittery/starved link; nonzero_errors worth "
+                 "investigating. Setup-only controllers naturally show low/0 "
+                 "sensor hits - that is expected, not a fault.")
     return "\n".join(lines)
 
 
-def run_capture(path, timeout=240):
+def run_capture(path, timeout=240, names=None):
     """Capture the banner, then read-only per-device stats. Returns text with a
     parsed summary on top and the raw dump below."""
     banner = console_session(path, [], timeout=30)
     serials = parse_device_serials(banner)
     raw = console_session(path, build_capture_script(serials), timeout=timeout)
     try:
-        summary = summarize(raw)
+        summary = summarize(raw, names)
     except Exception as exc:
         summary = f"[probe] summary parse failed: {exc}"
     return "\n".join([
@@ -270,7 +312,8 @@ def capture_to_file(log_dir, label, console=None, timeout=240):
         path = find_lighthouse_console(console)
         if not path:
             return None, "lighthouse_console.exe not found"
-        text = run_capture(path, timeout)
+        names = load_names(os.path.dirname(log_dir.rstrip("/\\")), os.getcwd())
+        text = run_capture(path, timeout, names)
         os.makedirs(log_dir, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe = "".join(c for c in label if c.isalnum() or c in "-_") or "run"

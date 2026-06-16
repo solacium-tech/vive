@@ -101,8 +101,10 @@ def main():
     out.append("\n=== lighthouse_console ===")
     if console:
         out.append(f"found: {console}")
+        names = lh.load_names(_base_dir(), os.getcwd())
+        out.append(f"names loaded: {len(names)} from tracker_names.txt")
         out.append("--- output ---")
-        out.append(lh.run_capture(console, args.timeout))
+        out.append(lh.run_capture(console, args.timeout, names))
     else:
         out.append("NOT FOUND. Pass --console <path> if SteamVR is installed "
                    "somewhere unusual.")
