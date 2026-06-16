@@ -49,11 +49,21 @@ if errorlevel 1 (
     goto :end
 )
 
+echo   - SteamVR probe build...
+pyinstaller --onefile --console --name steamvr_probe ^
+    --collect-all openvr ^
+    tools\steamvr_probe.py
+if errorlevel 1 (
+    echo ERROR: probe build failed.
+    goto :end
+)
+
 echo.
 echo =====================================================================
 echo  DONE.  Your tools are in dist\ :
 echo    dist\vive_dongle_gui.exe       (friendly window - start here)
 echo    dist\vive_dongle_monitor.exe   (console + CLI flags, scriptable)
+echo    dist\steamvr_probe.exe         (read-only SteamVR diagnostic probe)
 echo  Copy whichever you want to the firewalled SteamVR PC and run it.
 echo =====================================================================
 

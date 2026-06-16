@@ -34,6 +34,11 @@ jobs:
           pyinstaller --onefile --console --name vive_dongle_monitor
           --collect-all openvr vive_dongle_monitor.py
 
+      - name: Build SteamVR probe executable
+        run: >
+          pyinstaller --onefile --console --name steamvr_probe
+          --collect-all openvr tools/steamvr_probe.py
+
       - name: Upload executables
         uses: actions/upload-artifact@v4
         with:
