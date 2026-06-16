@@ -84,7 +84,7 @@ def main():
     ap.add_argument("--console", help="path to lighthouse_console.exe")
     ap.add_argument("--driver-debug", action="store_true",
                     help="also try OpenVR DriverDebugRequest (experimental)")
-    ap.add_argument("--timeout", type=int, default=120)
+    ap.add_argument("--timeout", type=int, default=240)
     args = ap.parse_args()
 
     out = ["SteamVR / Lighthouse read-only probe",

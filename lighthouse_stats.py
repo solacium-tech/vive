@@ -24,13 +24,20 @@ SAFE_READ_COMMANDS = [
     "version",      # firmware/hardware version
     "battery",      # battery status
     "errors",       # lighthouse error/status structure
-    "usbstats",     # one-time USB packet-rate stats (incremental-loss signal)
+    "usbstats",     # USB packet-rate stats (incremental-loss signal)
     "sensorcheck",  # hits/widths per optical sensor (dead-zone signal)
-    "imustats",     # IMU statistics
+    "imustats",     # IMU statistics (rate + interval jitter)
     "period",       # sync statistics
 ]
+# usbstats needs a ~10s window to actually measure (otherwise it just prints
+# "measuring..."), so we issue it, sleep, then read it again. `sleep` is the
+# console's own read-only "really just sleep" command.
+PER_DEVICE_SEQUENCE = [
+    "version", "battery", "errors", "sensorcheck", "imustats", "period",
+    "usbstats", "sleep 10500", "usbstats",
+]
 ALLOWED_FIRST_TOKENS = set(SAFE_READ_COMMANDS) | {
-    "help", "?", "deviceinfo", "serial", "quit", "exit"}
+    "help", "?", "deviceinfo", "serial", "sleep", "quit", "exit"}
 
 CONSOLE_RELPATH = os.path.join(
     "tools", "lighthouse", "bin", "win64", "lighthouse_console.exe")
@@ -138,26 +145,123 @@ def build_capture_script(serials):
     if serials:
         for s in serials:
             cmds.append(f"serial {s}")
-            cmds.extend(SAFE_READ_COMMANDS)
+            cmds.extend(PER_DEVICE_SEQUENCE)
     else:
-        cmds.extend(SAFE_READ_COMMANDS)
+        cmds.extend(PER_DEVICE_SEQUENCE)
     return cmds
 
 
-def run_capture(path, timeout=120):
-    """Capture the banner, then read-only per-device stats. Returns text."""
+# ---- summary parsing (best-effort, tolerant of version differences) --------
+
+ERROR_NAMES = (
+    "missing_rising_edge", "backward_time", "pulse_queue_overflow",
+    "short_sync", "long_sync", "invalid_calibration_size",
+    "invalid_calibration_crc", "invalid_calibration_version", "queue_overflow",
+    "spammy_sensor", "long_optical_packet_delay",
+)
+
+
+def _device_blocks(raw):
+    """Split the session output into (dongle_serial, text) blocks."""
+    marker = re.compile(r"Connected to receiver ([0-9A-Za-z-]+)")
+    blocks, cur, name = [], [], None
+    for line in raw.splitlines():
+        m = marker.search(line)
+        if m and "lighthouse_console:" in line:
+            if name is not None:
+                blocks.append((name, "\n".join(cur)))
+            name, cur = m.group(1), [line]
+        else:
+            cur.append(line)
+    if name is not None:
+        blocks.append((name, "\n".join(cur)))
+    return blocks
+
+
+def summarize(raw):
+    """Turn the raw capture into a compact per-receiver health table."""
+    rows = []
+    for dongle, text in _device_blocks(raw):
+        tracker = ""
+        mt = re.search(r"(LHR-[0-9A-Fa-f]+): Connected to receiver", text)
+        if mt:
+            tracker = mt.group(1)
+        batt = (re.search(r"battery \([^)]*\):\s*(\d+)", text) or [None, "?"])[1]
+        imu = re.search(r"rate ([\d.]+)Hz interval [\d.]+ms sigma ([\d.]+)ms",
+                        text)
+        imu_hz = imu.group(1) if imu else "?"
+        imu_sigma = imu.group(2) if imu else "?"
+        # nonzero error counters
+        errs = []
+        for name in ERROR_NAMES:
+            m = re.search(rf"{name}\s*:\s*(\d+)", text)
+            if m and int(m.group(1)) > 0:
+                errs.append(f"{name}={m.group(1)}")
+        # sensor hits: take the table with the most rows seeing light
+        best_total = best_hit = 0
+        for tbl in re.split(r"SensorID\s+HitCount", text)[1:]:
+            total = hit = 0
+            for ln in tbl.splitlines():
+                m = re.match(r"\s*(\d+)\s+(\d+)\s+(\d+)\s+\d+\s+\d+", ln)
+                if m:
+                    total += 1
+                    if int(m.group(2)) > 0:
+                        hit += 1
+            if total and hit >= best_hit:
+                best_total, best_hit = total, hit
+        sensors = f"{best_hit}/{best_total}" if best_total else "-"
+        # usb packet rates (after the dwell); grab any "<stream> <n>/sec"-ish
+        usb = re.findall(r"\b(IMU|Optical|VrController)\b[^\n]*?([\d.]+)\s*/?s",
+                         text)
+        usb_str = ", ".join(f"{k}={v}" for k, v in usb) or "measuring/none"
+        rows.append((dongle, tracker, f"{batt}%", imu_hz, imu_sigma,
+                     sensors, usb_str, ", ".join(errs) or "none"))
+
+    # The device auto-connected at launch yields a duplicate, sparser row;
+    # keep the last (fullest) row per dongle, preserving first-seen order.
+    order, dedup = [], {}
+    for r in rows:
+        if r[0] not in dedup:
+            order.append(r[0])
+        dedup[r[0]] = r
+    rows = [dedup[k] for k in order]
+
+    head = ("dongle", "tracker", "batt", "imuHz", "imuSig",
+            "sens(hit/seen)", "usb_rate", "nonzero_errors")
+    widths = [max(len(str(r[i])) for r in [head] + rows) for i in range(len(head))]
+    fmt = "  ".join(f"{{:<{w}}}" for w in widths)
+    lines = ["=== SUMMARY (per receiver; read-only) ===",
+             fmt.format(*head)]
+    lines += [fmt.format(*map(str, r)) for r in rows]
+    lines.append("")
+    lines.append("notes: low sens(hit/seen) = optical dead zone/occlusion; "
+                 "low imuHz or high imuSig = jittery/starved link; any "
+                 "nonzero_errors worth investigating.")
+    return "\n".join(lines)
+
+
+def run_capture(path, timeout=240):
+    """Capture the banner, then read-only per-device stats. Returns text with a
+    parsed summary on top and the raw dump below."""
     banner = console_session(path, [], timeout=30)
     serials = parse_device_serials(banner)
+    raw = console_session(path, build_capture_script(serials), timeout=timeout)
+    try:
+        summary = summarize(raw)
+    except Exception as exc:
+        summary = f"[probe] summary parse failed: {exc}"
     return "\n".join([
         f"[probe] parsed {len(serials)} device serial(s): "
         f"{', '.join(serials) or '(none)'}",
-        f"[probe] read-only commands per device: {SAFE_READ_COMMANDS}",
-        "--- session output ---",
-        console_session(path, build_capture_script(serials), timeout=timeout),
+        "",
+        summary,
+        "",
+        "=== RAW SESSION OUTPUT ===",
+        raw,
     ])
 
 
-def capture_to_file(log_dir, label, console=None, timeout=120):
+def capture_to_file(log_dir, label, console=None, timeout=240):
     """Run the read-only capture and write <label>_<ts>_lighthouse.txt.
 
     Returns (path_or_None, message). Never raises.
