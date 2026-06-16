@@ -213,16 +213,39 @@ def main():
     else:
         out.append("skipped (pass --driver-debug to enable)")
 
-    log_dir = os.path.join(_base_dir(), "logs")
-    os.makedirs(log_dir, exist_ok=True)
-    stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    path = os.path.join(log_dir, f"steamvr_probe_{stamp}.txt")
     text = "\n".join(out) + "\n"
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(text)
+    # Print first, so the console shows output even if the file write fails.
     print(text)
-    print(f"\n[probe] written to {path}")
+
+    log_dir = os.path.join(_base_dir(), "logs")
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+        stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = os.path.join(log_dir, f"steamvr_probe_{stamp}.txt")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        print(f"[probe] written to {path}")
+    except Exception as exc:
+        print(f"[probe] could NOT write output file: {exc}")
+
+
+def _entry():
+    """Wrapper: surface any crash and keep the window open for double-clicks."""
+    try:
+        main()
+    except Exception:
+        import traceback
+        print("\n[probe] CRASHED:")
+        traceback.print_exc()
+    finally:
+        # When run as the packaged .exe (double-clicked), the console would
+        # otherwise vanish before it can be read.
+        if getattr(sys, "frozen", False):
+            try:
+                input("\nDone. Press Enter to close this window...")
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
-    main()
+    _entry()
