@@ -65,7 +65,10 @@ IDLE_GRACE_S = 3.0
 # Classification thresholds (percent)
 RF_LOSS_WARN = 0.5
 RF_LOSS_CRIT = 2.0
-OPTICAL_WARN = 2.0
+# Operators want any optical dead zone flagged, because even ~1% vision loss
+# causes IMU-coast drift (erratic movement). So amber triggers as soon as the
+# column shows any loss at all (>=0.01%); red stays reserved for sustained loss.
+OPTICAL_WARN = 0.01
 OPTICAL_CRIT = 8.0
 
 # Severity keys used by both front-ends
