@@ -18,6 +18,7 @@ Front-ends: vive_dongle_monitor.py (console), vive_dongle_gui.py (GUI).
 """
 
 import csv
+import math
 import os
 import textwrap
 import threading
@@ -44,6 +45,20 @@ STALL_MS = 60               # connected but no new input packet -> stall
 # healthy tracker - even a still one - always shows tiny IMU/optical jitter, so
 # a long freeze is the tell. Generous threshold to avoid false positives.
 STALE_FREEZE_MS = 400
+
+# Experimental pose-jitter detection. Partial occlusion (e.g. clothing over a
+# tracker) often leaves SteamVR reporting Running_OK with a valid pose - so no
+# loss registers - while the pose actually snaps/jitters. A tracking "snap"
+# shows up as a single frame whose position jump is far faster than the
+# tracker's own recent motion. This is a HEURISTIC: measure first (peak jump +
+# glitch count are always recorded), and only raise a soft flag above the
+# thresholds below. Tune against a fabric-on / fabric-off A/B.
+# Acceleration discriminates jitter from fast-but-smooth motion: a tracking snap
+# reverses velocity in one frame, implying an implausible acceleration, whereas
+# even a fast kick has steady velocity (low accel). ~150 m/s2 is ~15g, above
+# normal limb motion and tracking noise but far below a snap.
+JITTER_ACCEL_MPS2 = 150.0
+JITTER_WARN_RATE = 8      # snaps/sec (recent) before raising an experimental flag
 
 # The live view answers "is this link OK right now", so its colours and
 # percentages are computed over a recent rolling window rather than the whole
@@ -132,6 +147,17 @@ class TrackerStat:
         self.stale_samples = 0
         # dongle-level wireless link drops, from SteamVR's own events
         self.wireless_disconnect_events = 0
+
+        # experimental pose-jitter detection (clothing occlusion etc.)
+        self._prev_pos = None
+        self._prev_vel = None
+        self.jitter_glitches = 0     # total single-frame accel spikes (snaps)
+        self.jitter_events = 0       # sustained jitter episodes
+        self.peak_accel = 0.0        # largest single-frame acceleration (m/s2)
+        self._jit_recent = deque()   # recent glitch timestamps (for rate)
+        self._in_jitter = False
+        self._jitter_edge = False
+
         self._last_pose_key = None
         self._last_pose_change = None
         self._in_stale = False
@@ -228,6 +254,39 @@ class TrackerStat:
                 self._last_pose_key = None
                 self._in_stale = False
 
+            # Experimental pose-jitter: a tracking snap reverses velocity in one
+            # frame, implying an implausible acceleration - the symptom of
+            # partial occlusion (e.g. clothing) that never trips a loss flag.
+            # Always measured; only flagged when sustained above JITTER_WARN_RATE.
+            if pose_ok and dt > 0:
+                pos = _pose_pos(pose)
+                if pos is not None and self._prev_pos is not None:
+                    vel = ((pos[0] - self._prev_pos[0]) / dt,
+                           (pos[1] - self._prev_pos[1]) / dt,
+                           (pos[2] - self._prev_pos[2]) / dt)
+                    if self._prev_vel is not None:
+                        accel = math.dist(vel, self._prev_vel) / dt
+                        if accel > self.peak_accel:
+                            self.peak_accel = accel
+                        if accel > JITTER_ACCEL_MPS2:
+                            self.jitter_glitches += 1
+                            self._jit_recent.append(now)
+                    self._prev_vel = vel
+                self._prev_pos = pos
+                while self._jit_recent and now - self._jit_recent[0] > 1.0:
+                    self._jit_recent.popleft()
+                if len(self._jit_recent) >= JITTER_WARN_RATE:
+                    if not self._in_jitter:
+                        self.jitter_events += 1
+                        self._in_jitter = True
+                        self._jitter_edge = True
+                        self._mark_issue(now, "jitter")
+                elif not self._jit_recent:
+                    self._in_jitter = False
+            else:
+                self._prev_pos = None
+                self._prev_vel = None
+
             if packet_num is not None:
                 if self.last_packet is None:
                     self.last_packet = packet_num
@@ -253,6 +312,9 @@ class TrackerStat:
             self.win_rf_loss += 1
             self._last_pose_key = None
             self._in_stale = False
+            self._prev_pos = None
+            self._prev_vel = None
+            self._in_jitter = False
 
         if not connected and self.was_connected:
             self.in_disconnect = True
@@ -335,6 +397,11 @@ class TrackerStat:
         return 100.0 * self.stale_samples / c if c else 0.0
 
     @property
+    def jitter_rate(self):
+        """Recent pose-snap glitches per second (experimental)."""
+        return len(self._jit_recent)
+
+    @property
     def update_hz(self):
         # Unknown if the device never advances its packet counter.
         if not self.packet_ever_advanced or self.connected_elapsed_s <= 0.2:
@@ -391,6 +458,10 @@ class TrackerStat:
             "stale_events": self.stale_events,
             "stale_pct": self.stale_pct,
             "wireless_disconnect_events": self.wireless_disconnect_events,
+            "jitter_events": self.jitter_events,
+            "jitter_glitches": self.jitter_glitches,
+            "jitter_rate": self.jitter_rate,
+            "peak_accel": self.peak_accel,
             "longest_disconnect_s": self.longest_disconnect_s,
             "connected": self.was_connected,
             "first_issue_time": self.first_issue_time,
@@ -504,6 +575,15 @@ def _pose_key(pose):
         return (m[0][0], m[0][1], m[0][2], m[0][3],
                 m[1][0], m[1][1], m[1][2], m[1][3],
                 m[2][0], m[2][1], m[2][2], m[2][3])
+    except Exception:
+        return None
+
+
+def _pose_pos(pose):
+    """The device's (x, y, z) world position from its pose matrix, or None."""
+    try:
+        m = pose.mDeviceToAbsoluteTracking
+        return (m[0][3], m[1][3], m[2][3])
     except Exception:
         return None
 
@@ -970,6 +1050,7 @@ class RFMonitor(threading.Thread):
         dropped_by_dongle = defaultdict(list)
         reconnected = []
         stale_started = []
+        jitter_started = []
         with self._lock:
             if raw_idle:
                 # Keep each tracker's state in sync but do not fold these
@@ -997,6 +1078,11 @@ class RFMonitor(threading.Thread):
                             st._stale_edge = False
                             stale_started.append(
                                 (st.label_or_serial(), st.dongle))
+                        if st._jitter_edge:
+                            st._jitter_edge = False
+                            jitter_started.append(
+                                (st.label_or_serial(), st.dongle,
+                                 st.jitter_rate, st.peak_accel))
                     if battery is not None:
                         st.battery = battery
 
@@ -1046,6 +1132,12 @@ class RFMonitor(threading.Thread):
                          f"stopped updating for >{STALE_FREEZE_MS / 1000:.1f}s "
                          f"- possible radio starvation or 2.4GHz interference "
                          f"(dongle {dongle})")
+        for label, dongle, rate, peak in jitter_started:
+            self._notify("alert",
+                         f"JITTER (experimental): {label} pose is snapping "
+                         f"erratically (~{rate}/s, peak {peak:.0f} m/s2) - "
+                         f"possible occlusion (e.g. clothing over the tracker) "
+                         f"(dongle {dongle})")
 
         # Pause/resume transitions (announced only after the grace window so
         # the event log records the gap instead of a flurry of false drops).
@@ -1085,6 +1177,7 @@ class RFMonitor(threading.Thread):
             "update_hz", "battery_pct",
             "not_updating_pct_total", "not_updating_events_total",
             "wireless_drops_total",
+            "jitter_events_total", "jitter_glitches_total", "peak_accel_mps2",
         ])
         self._event_file = open(evt_path, "w", encoding="utf-8")
         self._event_file.write(
@@ -1114,6 +1207,8 @@ class RFMonitor(threading.Thread):
                 f"{r['battery']:.0f}" if r["battery"] is not None else "",
                 f"{r['stale_pct']:.3f}", r["stale_events"],
                 r["wireless_disconnect_events"],
+                r["jitter_events"], r["jitter_glitches"],
+                f"{r['peak_accel']:.1f}",
             ])
         self._csv_file.flush()
 
