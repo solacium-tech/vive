@@ -26,36 +26,36 @@ jobs:
 
       - name: Build GUI executable
         run: >
-          pyinstaller --onedir --noconsole --name vive_dongle_gui
+          pyinstaller --onefile --noconsole --name vive_dongle_gui
           --collect-all openvr vive_dongle_gui.py
 
       - name: Build console executable
         run: >
-          pyinstaller --onedir --console --name vive_dongle_monitor
+          pyinstaller --onefile --console --name vive_dongle_monitor
           --collect-all openvr vive_dongle_monitor.py
 
       - name: Build SteamVR probe executable
         run: >
-          pyinstaller --onedir --console --name steamvr_probe
+          pyinstaller --onefile --console --name steamvr_probe
           --paths . --hidden-import lighthouse_stats
           --collect-all openvr tools/steamvr_probe.py
 
-      # The monitor is shipped on its own. The probe reads the registry and
-      # launches lighthouse_console, which trips antivirus "trojan" heuristics,
-      # so it is a SEPARATE artifact - downloading the monitor never pulls it
-      # in, keeping that download clean.
+      # Single-file builds. The monitor ships on its own; the probe reads the
+      # registry and launches lighthouse_console (antivirus "trojan" heuristic
+      # bait) so it is a SEPARATE artifact - downloading the monitor never
+      # pulls it in.
       - name: Upload monitor (GUI + console)
         uses: actions/upload-artifact@v4
         with:
           name: vive-monitor-windows
           path: |
-            dist/vive_dongle_gui
-            dist/vive_dongle_monitor
+            dist/vive_dongle_gui.exe
+            dist/vive_dongle_monitor.exe
           retention-days: 30
 
       - name: Upload SteamVR probe (separate; may trip antivirus)
         uses: actions/upload-artifact@v4
         with:
           name: vive-probe-windows
-          path: dist/steamvr_probe
+          path: dist/steamvr_probe.exe
           retention-days: 30

@@ -27,14 +27,13 @@ if errorlevel 1 (
     goto :end
 )
 
-echo [3/3] Building executables with PyInstaller...
+echo [3/3] Building single-file executables with PyInstaller...
 REM --collect-all openvr ensures openvr_api.dll and bindings are bundled.
-REM --onedir (folder) builds are used instead of --onefile: the single-file
-REM self-extracting stub is a common antivirus false-positive trigger. Each
-REM tool ends up as a FOLDER under dist\ - copy the whole folder to the rig.
+REM --onefile gives ONE standalone .exe per tool (as in earlier builds) so you
+REM can copy/download a single file rather than a folder.
 
 echo   - GUI build...
-pyinstaller --onedir --noconsole --name vive_dongle_gui ^
+pyinstaller --onefile --noconsole --name vive_dongle_gui ^
     --collect-all openvr ^
     vive_dongle_gui.py
 if errorlevel 1 (
@@ -43,7 +42,7 @@ if errorlevel 1 (
 )
 
 echo   - Console build...
-pyinstaller --onedir --console --name vive_dongle_monitor ^
+pyinstaller --onefile --console --name vive_dongle_monitor ^
     --collect-all openvr ^
     vive_dongle_monitor.py
 if errorlevel 1 (
@@ -57,7 +56,7 @@ REM build it only when you specifically need the deep diagnostic:
 REM     build_exe.bat probe
 if /I "%~1"=="probe" (
     echo   - SteamVR probe build...
-    pyinstaller --onedir --console --name steamvr_probe ^
+    pyinstaller --onefile --console --name steamvr_probe ^
         --paths . --hidden-import lighthouse_stats ^
         --collect-all openvr ^
         tools\steamvr_probe.py
@@ -69,10 +68,10 @@ if /I "%~1"=="probe" (
 
 echo.
 echo =====================================================================
-echo  DONE.  Each tool is a FOLDER under dist\ - copy the WHOLE folder:
-echo    dist\vive_dongle_gui\vive_dongle_gui.exe       (start here)
-echo    dist\vive_dongle_monitor\vive_dongle_monitor.exe   (console + CLI)
-echo  For normal monitoring copy ONLY the vive_dongle_gui folder.
+echo  DONE.  Single-file tools in dist\ :
+echo    dist\vive_dongle_gui.exe       (start here)
+echo    dist\vive_dongle_monitor.exe   (console + CLI)
+echo  For normal monitoring just copy dist\vive_dongle_gui.exe to the rig.
 echo  The SteamVR probe is built only with: build_exe.bat probe
 echo  (it can trip antivirus; build/copy it only when you need it).
 echo =====================================================================

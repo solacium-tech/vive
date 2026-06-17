@@ -113,8 +113,9 @@ Two ways to do that:
 **Option A - GitHub Actions (works from a Mac).** Every push to this
 repository builds the executables on a Windows runner. On GitHub open
 *Actions* -> *Build Windows executables* -> latest run -> download the
-`vive-link-monitor-windows` artifact (a zip containing one folder per tool).
-The workflow can also be started manually with *Run workflow*.
+`vive-monitor-windows` artifact (the single GUI + console `.exe` files). The
+probe is a separate `vive-probe-windows` artifact. The workflow can also be
+started manually with *Run workflow*.
 
 **Option B - any Windows machine with Python 3.9+ and internet:**
 
@@ -122,24 +123,29 @@ The workflow can also be started manually with *Run workflow*.
 build_exe.bat
 ```
 
-Either way you get one **folder** per tool under `dist\` (a `--onedir` build -
-the single-file form is a common antivirus false-positive trigger, so it is
-avoided):
+Either way you get standalone single-file executables under `dist\`:
 
-- `dist\vive_dongle_gui\vive_dongle_gui.exe` - windowed version (recommended)
-- `dist\vive_dongle_monitor\vive_dongle_monitor.exe` - console version
-- `dist\steamvr_probe\steamvr_probe.exe` - read-only SteamVR diagnostic probe
+- `dist\vive_dongle_gui.exe` - windowed version (recommended)
+- `dist\vive_dongle_monitor.exe` - console version with CLI flags
+- `dist\steamvr_probe.exe` - read-only SteamVR diagnostic probe
+  (built only with `build_exe.bat probe`; can trip antivirus heuristics)
 
 The `openvr` wheel bundles `openvr_api.dll`, and PyInstaller's
-`--collect-all openvr` packs it into the folder, so nothing needs to be
-installed on the target machine. Keep each folder's contents together.
+`--collect-all openvr` packs it into the executable, so nothing needs to be
+installed on the target machine.
+
+> **Antivirus note.** Unsigned PyInstaller `.exe`s are sometimes flagged as a
+> false positive (e.g. `Trojan:Win32/Sabsik.FL.A!ml`) - it is the packing, not
+> the code (which makes no network connections). If you hit it: allow/exclude
+> it in Windows Security, run from source via `run_from_source.bat`, or have
+> it code-signed for distribution at scale.
 
 ## Run on the SteamVR PC
 
-1. Copy the whole tool **folder** to the PC (USB stick, file share, or any
-   file transfer) and run the `.exe` inside it.
+1. Copy `vive_dongle_gui.exe` to the PC (USB stick, file share, or any file
+   transfer).
 2. Start SteamVR; confirm the trackers are powered on and tracking.
-3. Double-click `vive_dongle_gui.exe` (inside its folder).
+3. Double-click `vive_dongle_gui.exe`.
    - Windows SmartScreen may warn because the binary is not code-signed:
      choose "More info", then "Run anyway".
    - If a Windows Firewall prompt appears it can be denied; the tool makes
