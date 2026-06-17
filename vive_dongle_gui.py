@@ -17,7 +17,7 @@ from tkinter import ttk, scrolledtext, messagebox
 import vive_rf_core as core
 
 APP_TITLE = "Vive Tracker Link Monitor"
-APP_VERSION = "2026-06-10r"   # shown in the title bar to confirm the build
+APP_VERSION = "2026-06-10s"   # shown in the title bar to confirm the build
 
 # fg / bg per severity
 SEV_STYLE = {
@@ -37,7 +37,7 @@ COLUMNS = (
     ("radio",   "Radio link (to dongle)",        160, "w"),
     ("drops",   "Radio drops",                    75, "center"),
     ("optic",   "Lighthouse (line of sight)",    160, "w"),
-    ("jitter",  "Movement jitter",               150, "w"),
+    ("update",  "Pose updates",                  130, "center"),
     ("batt",    "Battery",                        65, "center"),
     ("link",    "Connected",                      80, "center"),
 )
@@ -159,10 +159,10 @@ class MonitorApp:
                  font=("Segoe UI", 9)).pack(side="left", padx=4)
         tk.Label(frame, text=f"Colours and % show roughly the last "
                  f"{core.RECENT_WINDOW_S:.0f}s (live); the saved report "
-                 f"covers the whole session.   \"Movement jitter\" = pose "
-                 f"snapping (often a marginal tracker-to-dongle link that never "
-                 f"trips radio loss).   Right-click a row to hide a device that "
-                 f"isn't part of this run.", fg="#90a4ae",
+                 f"covers the whole session.   \"Pose updates\" = how often the "
+                 f"pose changes (~100% when healthy); a drop can mean the "
+                 f"tracker isn't sending fresh data.   Right-click a row to hide "
+                 f"a device that isn't part of this run.", fg="#90a4ae",
                  font=("Segoe UI", 8)).pack(anchor="w", padx=2)
 
         # Shown only when devices are hidden; click to bring them all back.
@@ -551,27 +551,26 @@ class MonitorApp:
                 # link clears within ~30s instead of staying red all session.
                 rf_word, _ = core.rf_verdict(r["recent_rf_loss_pct"])
                 op_word, _ = core.optical_verdict(r["recent_optical_loss_pct"])
-                jit_rate = r.get("jitter_rate", 0)
-                jit_word, jit_sev = core.jitter_verdict(jit_rate)
+                # Pose updates: % of recent frames whose pose changed, plus the
+                # effective rate. Measurement only (no colour) - watch it drop
+                # if a tracker stops getting fresh data.
+                upd = f"{r.get('fresh_pct', 100):.0f}%  ({r.get('effective_hz', 0):.0f}Hz)"
                 vals = (f"{rf_word}  -  {r['recent_rf_loss_pct']:.2f}% lost",
                         r["disconnect_events"],
                         f"{op_word}  -  {r['recent_optical_loss_pct']:.2f}% lost",
-                        f"{jit_word}  -  {jit_rate}/s",
+                        upd,
                         batt,
                         "Up" if r["connected"] else "DOWN")
-                # Jitter colours the row too, so a snapping tracker stands out
-                # even though it never trips the binary radio-loss flag.
-                row_sev = core.worse(r["recent_severity"], jit_sev)
                 name = r.get("name")
                 label = (f"{name}  ({r['serial']})" if name
                          else r["serial"])
                 if self.tree.exists(iid):
                     self.tree.item(iid, text="    " + label, values=vals,
-                                   tags=(row_sev,))
+                                   tags=(r["recent_severity"],))
                 else:
                     self.tree.insert(node, "end", iid=iid,
                                      text="    " + label,
-                                     values=vals, tags=(row_sev,))
+                                     values=vals, tags=(r["recent_severity"],))
 
     # ---- hiding irrelevant devices ----
 

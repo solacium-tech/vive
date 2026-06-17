@@ -18,7 +18,6 @@ Front-ends: vive_dongle_monitor.py (console), vive_dongle_gui.py (GUI).
 """
 
 import csv
-import math
 import os
 import textwrap
 import threading
@@ -46,19 +45,15 @@ STALL_MS = 60               # connected but no new input packet -> stall
 # a long freeze is the tell. Generous threshold to avoid false positives.
 STALE_FREEZE_MS = 400
 
-# Experimental pose-jitter detection. Partial occlusion (or a marginal
-# tracker-to-dongle link) often leaves SteamVR reporting Running_OK with a valid
-# pose - so no loss registers - while the pose snaps. A "snap" is a velocity
-# REVERSAL within a single frame: the position jumps out and comes straight
-# back. This is the key discriminator from real motion - even a hard, fast
-# footstep keeps a consistent direction through a 4ms frame, so it is NOT
-# counted; only a sub-frame reversal (physically impossible for a limb) is.
-# JITTER_REVERSAL_MPS sets how big the one-frame reversal must be: at 3 m/s,
-# realistic walking (swing + hard heel strike) produces zero snaps in testing,
-# while occlusion/radio jitter produces hundreds. HEURISTIC: peak_accel is
-# always measured; tune against a real A/B.
-JITTER_REVERSAL_MPS = 3.0
-JITTER_WARN_RATE = 8      # snaps/sec (recent) before raising an experimental flag
+# Effective pose update rate (measure-only). A healthy tracker - even a still
+# one - micro-changes its pose every frame, so it is never bit-identical frame
+# to frame. A tracker that is not getting data at the full rate HOLDS the same
+# pose for runs of frames. We therefore record, over a rolling window, the
+# fraction of frames whose pose actually changed ("fresh %") and the resulting
+# effective update rate. This generalises the NOT UPDATING freeze detector to
+# catch PARTIAL starvation, and is the inverse of jitter: "is the tracker
+# sending fresh data?". No alarm yet - this is a measurement to watch/compare.
+UPDATE_WINDOW_S = 1.0
 
 # The live view answers "is this link OK right now", so its colours and
 # percentages are computed over a recent rolling window rather than the whole
@@ -114,30 +109,6 @@ def optical_verdict(loss_pct):
     return word, sev
 
 
-def jitter_verdict(rate):
-    """Per-tracker movement-jitter verdict (snaps/sec) as (word, severity).
-
-    Healthy motion produces ~0 snaps, so any sustained snapping is real: amber
-    once it starts, red when it's heavy (>= JITTER_WARN_RATE).
-    """
-    if rate >= JITTER_WARN_RATE:
-        sev = CRIT
-    elif rate >= 1:
-        sev = WARN
-    else:
-        sev = HEALTHY
-    word = {HEALTHY: "Smooth", WARN: "Jittery", CRIT: "SNAPPING"}[sev]
-    return word, sev
-
-
-_SEV_ORDER = {HEALTHY: 0, WARN: 1, CRIT: 2}
-
-
-def worse(a, b):
-    """The more severe of two severity keys."""
-    return a if _SEV_ORDER.get(a, 0) >= _SEV_ORDER.get(b, 0) else b
-
-
 class TrackerStat:
     """Accumulated link statistics for one tracked device."""
 
@@ -172,15 +143,11 @@ class TrackerStat:
         # dongle-level wireless link drops, from SteamVR's own events
         self.wireless_disconnect_events = 0
 
-        # experimental pose-jitter detection (clothing occlusion etc.)
-        self._prev_pos = None
-        self._prev_vel = None
-        self.jitter_glitches = 0     # total single-frame accel spikes (snaps)
-        self.jitter_events = 0       # sustained jitter episodes
-        self.peak_accel = 0.0        # largest single-frame acceleration (m/s2)
-        self._jit_recent = deque()   # recent glitch timestamps (for rate)
-        self._in_jitter = False
-        self._jitter_edge = False
+        # effective pose update rate (is the tracker sending fresh data?)
+        self._upd_window = deque()   # (timestamp, changed_bool) over last second
+        self._upd_fresh = 0          # running count of 'changed' in the window
+        self.fresh_pct = 100.0       # % of recent frames whose pose changed
+        self.effective_hz = 0.0      # resulting pose updates/sec
 
         self._last_pose_key = None
         self._last_pose_change = None
@@ -257,11 +224,15 @@ class TrackerStat:
                 self.win_oor += 1
                 oor = True
 
-            # Pose-freeze detection: only meaningful while the device claims to
-            # be tracking fine. A frozen pose then means the radio data stopped.
+            # Pose-freeze + effective-update-rate. A healthy tracker (even still)
+            # changes its pose every frame; held/repeated frames mean the host
+            # isn't getting fresh data. NOT UPDATING flags a full freeze; the
+            # rolling fresh-% / effective-Hz below also catches partial
+            # starvation (held runs shorter than the freeze threshold).
             if pose_ok:
                 key = _pose_key(pose)
-                if key is None or key != self._last_pose_key:
+                pose_changed = (key is None) or (key != self._last_pose_key)
+                if pose_changed:
                     self._last_pose_key = key
                     self._last_pose_change = now
                     self._in_stale = False
@@ -274,46 +245,26 @@ class TrackerStat:
                         self._in_stale = True
                         self._stale_edge = True
                         self._mark_issue(now, "stale")
+                # rolling window of changed/held frames
+                self._upd_window.append((now, pose_changed))
+                if pose_changed:
+                    self._upd_fresh += 1
+                while self._upd_window and now - self._upd_window[0][0] > \
+                        UPDATE_WINDOW_S:
+                    _, ch = self._upd_window.popleft()
+                    if ch:
+                        self._upd_fresh -= 1
+                total = len(self._upd_window)
+                if total:
+                    self.fresh_pct = 100.0 * self._upd_fresh / total
+                    span = now - self._upd_window[0][0]
+                    self.effective_hz = (self._upd_fresh / span
+                                         if span > 0 else 0.0)
             else:
                 self._last_pose_key = None
                 self._in_stale = False
-
-            # Experimental pose-jitter: count a "snap" only on a sharp velocity
-            # REVERSAL within one frame (position jumps out and back). Real
-            # motion - even a hard footstep - keeps a consistent direction
-            # through a frame, so it is not counted; occlusion/radio snapping
-            # reverses. Always measured; flagged only when sustained.
-            if pose_ok and dt > 0:
-                pos = _pose_pos(pose)
-                if pos is not None and self._prev_pos is not None:
-                    vel = ((pos[0] - self._prev_pos[0]) / dt,
-                           (pos[1] - self._prev_pos[1]) / dt,
-                           (pos[2] - self._prev_pos[2]) / dt)
-                    if self._prev_vel is not None:
-                        pv = self._prev_vel
-                        dv = math.dist(vel, pv)
-                        if dv / dt > self.peak_accel:
-                            self.peak_accel = dv / dt
-                        # dot < 0 means the velocity flipped direction this frame
-                        dot = vel[0] * pv[0] + vel[1] * pv[1] + vel[2] * pv[2]
-                        if dot < 0 and dv > JITTER_REVERSAL_MPS:
-                            self.jitter_glitches += 1
-                            self._jit_recent.append(now)
-                    self._prev_vel = vel
-                self._prev_pos = pos
-                while self._jit_recent and now - self._jit_recent[0] > 1.0:
-                    self._jit_recent.popleft()
-                if len(self._jit_recent) >= JITTER_WARN_RATE:
-                    if not self._in_jitter:
-                        self.jitter_events += 1
-                        self._in_jitter = True
-                        self._jitter_edge = True
-                        self._mark_issue(now, "jitter")
-                elif not self._jit_recent:
-                    self._in_jitter = False
-            else:
-                self._prev_pos = None
-                self._prev_vel = None
+                self._upd_window.clear()
+                self._upd_fresh = 0
 
             if packet_num is not None:
                 if self.last_packet is None:
@@ -340,9 +291,8 @@ class TrackerStat:
             self.win_rf_loss += 1
             self._last_pose_key = None
             self._in_stale = False
-            self._prev_pos = None
-            self._prev_vel = None
-            self._in_jitter = False
+            self._upd_window.clear()
+            self._upd_fresh = 0
 
         if not connected and self.was_connected:
             self.in_disconnect = True
@@ -425,11 +375,6 @@ class TrackerStat:
         return 100.0 * self.stale_samples / c if c else 0.0
 
     @property
-    def jitter_rate(self):
-        """Recent pose-snap glitches per second (experimental)."""
-        return len(self._jit_recent)
-
-    @property
     def update_hz(self):
         # Unknown if the device never advances its packet counter.
         if not self.packet_ever_advanced or self.connected_elapsed_s <= 0.2:
@@ -486,10 +431,8 @@ class TrackerStat:
             "stale_events": self.stale_events,
             "stale_pct": self.stale_pct,
             "wireless_disconnect_events": self.wireless_disconnect_events,
-            "jitter_events": self.jitter_events,
-            "jitter_glitches": self.jitter_glitches,
-            "jitter_rate": self.jitter_rate,
-            "peak_accel": self.peak_accel,
+            "fresh_pct": self.fresh_pct,
+            "effective_hz": self.effective_hz,
             "longest_disconnect_s": self.longest_disconnect_s,
             "connected": self.was_connected,
             "first_issue_time": self.first_issue_time,
@@ -603,15 +546,6 @@ def _pose_key(pose):
         return (m[0][0], m[0][1], m[0][2], m[0][3],
                 m[1][0], m[1][1], m[1][2], m[1][3],
                 m[2][0], m[2][1], m[2][2], m[2][3])
-    except Exception:
-        return None
-
-
-def _pose_pos(pose):
-    """The device's (x, y, z) world position from its pose matrix, or None."""
-    try:
-        m = pose.mDeviceToAbsoluteTracking
-        return (m[0][3], m[1][3], m[2][3])
     except Exception:
         return None
 
@@ -1078,7 +1012,6 @@ class RFMonitor(threading.Thread):
         dropped_by_dongle = defaultdict(list)
         reconnected = []
         stale_started = []
-        jitter_started = []
         with self._lock:
             if raw_idle:
                 # Keep each tracker's state in sync but do not fold these
@@ -1106,11 +1039,6 @@ class RFMonitor(threading.Thread):
                             st._stale_edge = False
                             stale_started.append(
                                 (st.label_or_serial(), st.dongle))
-                        if st._jitter_edge:
-                            st._jitter_edge = False
-                            jitter_started.append(
-                                (st.label_or_serial(), st.dongle,
-                                 st.jitter_rate, st.peak_accel))
                     if battery is not None:
                         st.battery = battery
 
@@ -1160,12 +1088,6 @@ class RFMonitor(threading.Thread):
                          f"stopped updating for >{STALE_FREEZE_MS / 1000:.1f}s "
                          f"- possible radio starvation or 2.4GHz interference "
                          f"(dongle {dongle})")
-        for label, dongle, rate, peak in jitter_started:
-            self._notify("alert",
-                         f"JITTER (experimental): {label} pose is snapping "
-                         f"erratically (~{rate}/s, peak {peak:.0f} m/s2) - "
-                         f"possible occlusion (e.g. clothing over the tracker) "
-                         f"(dongle {dongle})")
 
         # Pause/resume transitions (announced only after the grace window so
         # the event log records the gap instead of a flurry of false drops).
@@ -1205,7 +1127,7 @@ class RFMonitor(threading.Thread):
             "update_hz", "battery_pct",
             "not_updating_pct_total", "not_updating_events_total",
             "wireless_drops_total",
-            "jitter_events_total", "jitter_glitches_total", "peak_accel_mps2",
+            "pose_fresh_pct", "effective_update_hz",
         ])
         self._event_file = open(evt_path, "w", encoding="utf-8")
         self._event_file.write(
@@ -1235,8 +1157,7 @@ class RFMonitor(threading.Thread):
                 f"{r['battery']:.0f}" if r["battery"] is not None else "",
                 f"{r['stale_pct']:.3f}", r["stale_events"],
                 r["wireless_disconnect_events"],
-                r["jitter_events"], r["jitter_glitches"],
-                f"{r['peak_accel']:.1f}",
+                f"{r['fresh_pct']:.1f}", f"{r['effective_hz']:.0f}",
             ])
         self._csv_file.flush()
 
