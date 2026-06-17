@@ -10,7 +10,6 @@ Requires SteamVR running locally. No network access is used.
 
 import glob
 import os
-import subprocess
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
@@ -366,6 +365,10 @@ class MonitorApp:
             if os.name == "nt":
                 os.startfile(path)
             else:
+                # Non-Windows (dev only): import lazily so the Windows build
+                # never wires up process-spawning, which antivirus heuristics
+                # dislike. The shipped exe uses os.startfile above.
+                import subprocess
                 subprocess.Popen(["xdg-open", path])
         except Exception:
             pass
