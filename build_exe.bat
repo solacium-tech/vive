@@ -27,12 +27,14 @@ if errorlevel 1 (
     goto :end
 )
 
-echo [3/3] Building single-file executables with PyInstaller...
+echo [3/3] Building executables with PyInstaller...
 REM --collect-all openvr ensures openvr_api.dll and bindings are bundled.
-REM Two outputs: a windowed GUI and a console version. Both are standalone.
+REM --onedir (folder) builds are used instead of --onefile: the single-file
+REM self-extracting stub is a common antivirus false-positive trigger. Each
+REM tool ends up as a FOLDER under dist\ - copy the whole folder to the rig.
 
 echo   - GUI build...
-pyinstaller --onefile --noconsole --name vive_dongle_gui ^
+pyinstaller --onedir --noconsole --name vive_dongle_gui ^
     --collect-all openvr ^
     vive_dongle_gui.py
 if errorlevel 1 (
@@ -41,7 +43,7 @@ if errorlevel 1 (
 )
 
 echo   - Console build...
-pyinstaller --onefile --console --name vive_dongle_monitor ^
+pyinstaller --onedir --console --name vive_dongle_monitor ^
     --collect-all openvr ^
     vive_dongle_monitor.py
 if errorlevel 1 (
@@ -50,7 +52,7 @@ if errorlevel 1 (
 )
 
 echo   - SteamVR probe build...
-pyinstaller --onefile --console --name steamvr_probe ^
+pyinstaller --onedir --console --name steamvr_probe ^
     --paths . --hidden-import lighthouse_stats ^
     --collect-all openvr ^
     tools\steamvr_probe.py
@@ -61,11 +63,12 @@ if errorlevel 1 (
 
 echo.
 echo =====================================================================
-echo  DONE.  Your tools are in dist\ :
-echo    dist\vive_dongle_gui.exe       (friendly window - start here)
-echo    dist\vive_dongle_monitor.exe   (console + CLI flags, scriptable)
-echo    dist\steamvr_probe.exe         (read-only SteamVR diagnostic probe)
-echo  Copy whichever you want to the firewalled SteamVR PC and run it.
+echo  DONE.  Each tool is a FOLDER under dist\ - copy the whole folder:
+echo    dist\vive_dongle_gui\vive_dongle_gui.exe       (start here)
+echo    dist\vive_dongle_monitor\vive_dongle_monitor.exe   (console + CLI)
+echo    dist\steamvr_probe\steamvr_probe.exe           (read-only probe)
+echo  Copy the folder you want to the firewalled SteamVR PC, then run the
+echo  .exe inside it. Keep the folder contents together.
 echo =====================================================================
 
 :end

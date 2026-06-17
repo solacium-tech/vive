@@ -111,9 +111,9 @@ PyInstaller does not cross-compile, so the `.exe` must be built on Windows.
 Two ways to do that:
 
 **Option A - GitHub Actions (works from a Mac).** Every push to this
-repository builds both executables on a Windows runner. On GitHub open
+repository builds the executables on a Windows runner. On GitHub open
 *Actions* -> *Build Windows executables* -> latest run -> download the
-`vive-link-monitor-windows` artifact (a zip containing both `.exe` files).
+`vive-link-monitor-windows` artifact (a zip containing one folder per tool).
 The workflow can also be started manually with *Run workflow*.
 
 **Option B - any Windows machine with Python 3.9+ and internet:**
@@ -122,20 +122,24 @@ The workflow can also be started manually with *Run workflow*.
 build_exe.bat
 ```
 
-Either way you get two standalone files:
+Either way you get one **folder** per tool under `dist\` (a `--onedir` build -
+the single-file form is a common antivirus false-positive trigger, so it is
+avoided):
 
-- `dist\vive_dongle_gui.exe` - windowed version (recommended)
-- `dist\vive_dongle_monitor.exe` - console version with CLI flags
+- `dist\vive_dongle_gui\vive_dongle_gui.exe` - windowed version (recommended)
+- `dist\vive_dongle_monitor\vive_dongle_monitor.exe` - console version
+- `dist\steamvr_probe\steamvr_probe.exe` - read-only SteamVR diagnostic probe
 
 The `openvr` wheel bundles `openvr_api.dll`, and PyInstaller's
-`--collect-all openvr` packs it into the executable, so nothing needs to be
-installed on the target machine.
+`--collect-all openvr` packs it into the folder, so nothing needs to be
+installed on the target machine. Keep each folder's contents together.
 
 ## Run on the SteamVR PC
 
-1. Copy the `.exe` to the PC (USB stick, file share, or any file transfer).
+1. Copy the whole tool **folder** to the PC (USB stick, file share, or any
+   file transfer) and run the `.exe` inside it.
 2. Start SteamVR; confirm the trackers are powered on and tracking.
-3. Double-click `vive_dongle_gui.exe`.
+3. Double-click `vive_dongle_gui.exe` (inside its folder).
    - Windows SmartScreen may warn because the binary is not code-signed:
      choose "More info", then "Run anyway".
    - If a Windows Firewall prompt appears it can be denied; the tool makes

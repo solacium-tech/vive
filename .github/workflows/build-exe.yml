@@ -26,17 +26,17 @@ jobs:
 
       - name: Build GUI executable
         run: >
-          pyinstaller --onefile --noconsole --name vive_dongle_gui
+          pyinstaller --onedir --noconsole --name vive_dongle_gui
           --collect-all openvr vive_dongle_gui.py
 
       - name: Build console executable
         run: >
-          pyinstaller --onefile --console --name vive_dongle_monitor
+          pyinstaller --onedir --console --name vive_dongle_monitor
           --collect-all openvr vive_dongle_monitor.py
 
       - name: Build SteamVR probe executable
         run: >
-          pyinstaller --onefile --console --name steamvr_probe
+          pyinstaller --onedir --console --name steamvr_probe
           --paths . --hidden-import lighthouse_stats
           --collect-all openvr tools/steamvr_probe.py
 
@@ -44,5 +44,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: vive-link-monitor-windows
-          path: dist/*.exe
+          path: dist/
           retention-days: 30
