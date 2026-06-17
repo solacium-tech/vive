@@ -51,24 +51,30 @@ if errorlevel 1 (
     goto :end
 )
 
-echo   - SteamVR probe build...
-pyinstaller --onedir --console --name steamvr_probe ^
-    --paths . --hidden-import lighthouse_stats ^
-    --collect-all openvr ^
-    tools\steamvr_probe.py
-if errorlevel 1 (
-    echo ERROR: probe build failed.
-    goto :end
+REM The probe reads the registry and launches lighthouse_console, which trips
+REM antivirus "trojan" heuristics. It is NOT built by default - pass "probe" to
+REM build it only when you specifically need the deep diagnostic:
+REM     build_exe.bat probe
+if /I "%~1"=="probe" (
+    echo   - SteamVR probe build...
+    pyinstaller --onedir --console --name steamvr_probe ^
+        --paths . --hidden-import lighthouse_stats ^
+        --collect-all openvr ^
+        tools\steamvr_probe.py
+    if errorlevel 1 (
+        echo ERROR: probe build failed.
+        goto :end
+    )
 )
 
 echo.
 echo =====================================================================
-echo  DONE.  Each tool is a FOLDER under dist\ - copy the whole folder:
+echo  DONE.  Each tool is a FOLDER under dist\ - copy the WHOLE folder:
 echo    dist\vive_dongle_gui\vive_dongle_gui.exe       (start here)
 echo    dist\vive_dongle_monitor\vive_dongle_monitor.exe   (console + CLI)
-echo    dist\steamvr_probe\steamvr_probe.exe           (read-only probe)
-echo  Copy the folder you want to the firewalled SteamVR PC, then run the
-echo  .exe inside it. Keep the folder contents together.
+echo  For normal monitoring copy ONLY the vive_dongle_gui folder.
+echo  The SteamVR probe is built only with: build_exe.bat probe
+echo  (it can trip antivirus; build/copy it only when you need it).
 echo =====================================================================
 
 :end

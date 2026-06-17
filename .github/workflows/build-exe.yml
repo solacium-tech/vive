@@ -40,9 +40,22 @@ jobs:
           --paths . --hidden-import lighthouse_stats
           --collect-all openvr tools/steamvr_probe.py
 
-      - name: Upload executables
+      # The monitor is shipped on its own. The probe reads the registry and
+      # launches lighthouse_console, which trips antivirus "trojan" heuristics,
+      # so it is a SEPARATE artifact - downloading the monitor never pulls it
+      # in, keeping that download clean.
+      - name: Upload monitor (GUI + console)
         uses: actions/upload-artifact@v4
         with:
-          name: vive-link-monitor-windows
-          path: dist/
+          name: vive-monitor-windows
+          path: |
+            dist/vive_dongle_gui
+            dist/vive_dongle_monitor
+          retention-days: 30
+
+      - name: Upload SteamVR probe (separate; may trip antivirus)
+        uses: actions/upload-artifact@v4
+        with:
+          name: vive-probe-windows
+          path: dist/steamvr_probe
           retention-days: 30
