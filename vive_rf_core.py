@@ -46,18 +46,18 @@ STALL_MS = 60               # connected but no new input packet -> stall
 # a long freeze is the tell. Generous threshold to avoid false positives.
 STALE_FREEZE_MS = 400
 
-# Experimental pose-jitter detection. Partial occlusion (e.g. clothing over a
-# tracker) often leaves SteamVR reporting Running_OK with a valid pose - so no
-# loss registers - while the pose actually snaps/jitters. A tracking "snap"
-# shows up as a single frame whose position jump is far faster than the
-# tracker's own recent motion. This is a HEURISTIC: measure first (peak jump +
-# glitch count are always recorded), and only raise a soft flag above the
-# thresholds below. Tune against a fabric-on / fabric-off A/B.
-# Acceleration discriminates jitter from fast-but-smooth motion: a tracking snap
-# reverses velocity in one frame, implying an implausible acceleration, whereas
-# even a fast kick has steady velocity (low accel). ~150 m/s2 is ~15g, above
-# normal limb motion and tracking noise but far below a snap.
-JITTER_ACCEL_MPS2 = 150.0
+# Experimental pose-jitter detection. Partial occlusion (or a marginal
+# tracker-to-dongle link) often leaves SteamVR reporting Running_OK with a valid
+# pose - so no loss registers - while the pose snaps. A "snap" is a velocity
+# REVERSAL within a single frame: the position jumps out and comes straight
+# back. This is the key discriminator from real motion - even a hard, fast
+# footstep keeps a consistent direction through a 4ms frame, so it is NOT
+# counted; only a sub-frame reversal (physically impossible for a limb) is.
+# JITTER_REVERSAL_MPS sets how big the one-frame reversal must be: at 3 m/s,
+# realistic walking (swing + hard heel strike) produces zero snaps in testing,
+# while occlusion/radio jitter produces hundreds. HEURISTIC: peak_accel is
+# always measured; tune against a real A/B.
+JITTER_REVERSAL_MPS = 3.0
 JITTER_WARN_RATE = 8      # snaps/sec (recent) before raising an experimental flag
 
 # The live view answers "is this link OK right now", so its colours and
@@ -278,10 +278,11 @@ class TrackerStat:
                 self._last_pose_key = None
                 self._in_stale = False
 
-            # Experimental pose-jitter: a tracking snap reverses velocity in one
-            # frame, implying an implausible acceleration - the symptom of
-            # partial occlusion (e.g. clothing) that never trips a loss flag.
-            # Always measured; only flagged when sustained above JITTER_WARN_RATE.
+            # Experimental pose-jitter: count a "snap" only on a sharp velocity
+            # REVERSAL within one frame (position jumps out and back). Real
+            # motion - even a hard footstep - keeps a consistent direction
+            # through a frame, so it is not counted; occlusion/radio snapping
+            # reverses. Always measured; flagged only when sustained.
             if pose_ok and dt > 0:
                 pos = _pose_pos(pose)
                 if pos is not None and self._prev_pos is not None:
@@ -289,10 +290,13 @@ class TrackerStat:
                            (pos[1] - self._prev_pos[1]) / dt,
                            (pos[2] - self._prev_pos[2]) / dt)
                     if self._prev_vel is not None:
-                        accel = math.dist(vel, self._prev_vel) / dt
-                        if accel > self.peak_accel:
-                            self.peak_accel = accel
-                        if accel > JITTER_ACCEL_MPS2:
+                        pv = self._prev_vel
+                        dv = math.dist(vel, pv)
+                        if dv / dt > self.peak_accel:
+                            self.peak_accel = dv / dt
+                        # dot < 0 means the velocity flipped direction this frame
+                        dot = vel[0] * pv[0] + vel[1] * pv[1] + vel[2] * pv[2]
+                        if dot < 0 and dv > JITTER_REVERSAL_MPS:
                             self.jitter_glitches += 1
                             self._jit_recent.append(now)
                     self._prev_vel = vel
