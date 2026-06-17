@@ -114,6 +114,30 @@ def optical_verdict(loss_pct):
     return word, sev
 
 
+def jitter_verdict(rate):
+    """Per-tracker movement-jitter verdict (snaps/sec) as (word, severity).
+
+    Healthy motion produces ~0 snaps, so any sustained snapping is real: amber
+    once it starts, red when it's heavy (>= JITTER_WARN_RATE).
+    """
+    if rate >= JITTER_WARN_RATE:
+        sev = CRIT
+    elif rate >= 1:
+        sev = WARN
+    else:
+        sev = HEALTHY
+    word = {HEALTHY: "Smooth", WARN: "Jittery", CRIT: "SNAPPING"}[sev]
+    return word, sev
+
+
+_SEV_ORDER = {HEALTHY: 0, WARN: 1, CRIT: 2}
+
+
+def worse(a, b):
+    """The more severe of two severity keys."""
+    return a if _SEV_ORDER.get(a, 0) >= _SEV_ORDER.get(b, 0) else b
+
+
 class TrackerStat:
     """Accumulated link statistics for one tracked device."""
 

@@ -17,7 +17,7 @@ from tkinter import ttk, scrolledtext, messagebox
 import vive_rf_core as core
 
 APP_TITLE = "Vive Tracker Link Monitor"
-APP_VERSION = "2026-06-10p"   # shown in the title bar to confirm the build
+APP_VERSION = "2026-06-10q"   # shown in the title bar to confirm the build
 
 # fg / bg per severity
 SEV_STYLE = {
@@ -34,11 +34,12 @@ BANNER_STYLE = {
 HEADER_BG = "#263238"
 
 COLUMNS = (
-    ("radio",   "Radio link (to dongle)",        180, "w"),
-    ("drops",   "Radio drops",                    90, "center"),
-    ("optic",   "Lighthouse (line of sight)",    180, "w"),
-    ("batt",    "Battery",                        75, "center"),
-    ("link",    "Connected",                      90, "center"),
+    ("radio",   "Radio link (to dongle)",        160, "w"),
+    ("drops",   "Radio drops",                    75, "center"),
+    ("optic",   "Lighthouse (line of sight)",    160, "w"),
+    ("jitter",  "Movement jitter",               150, "w"),
+    ("batt",    "Battery",                        65, "center"),
+    ("link",    "Connected",                      80, "center"),
 )
 
 LEGEND = (
@@ -158,8 +159,10 @@ class MonitorApp:
                  font=("Segoe UI", 9)).pack(side="left", padx=4)
         tk.Label(frame, text=f"Colours and % show roughly the last "
                  f"{core.RECENT_WINDOW_S:.0f}s (live); the saved report "
-                 f"covers the whole session.   Right-click a row to hide a "
-                 f"device that isn't part of this run.", fg="#90a4ae",
+                 f"covers the whole session.   \"Movement jitter\" = pose "
+                 f"snapping (often a marginal tracker-to-dongle link that never "
+                 f"trips radio loss).   Right-click a row to hide a device that "
+                 f"isn't part of this run.", fg="#90a4ae",
                  font=("Segoe UI", 8)).pack(anchor="w", padx=2)
 
         # Shown only when devices are hidden; click to bring them all back.
@@ -530,7 +533,7 @@ class MonitorApp:
             d_vals = (f"{rf_word}  -  {a['recent_rf_loss_pct']:.2f}% lost",
                       a["dropouts"],
                       f"{op_word}  -  {a['recent_optical_loss_pct']:.2f}% lost",
-                      "", "")
+                      "", "", "")
             node = self._dongle_nodes.get(dongle)
             if node is None:
                 node = self.tree.insert("", "end", text=d_text, values=d_vals,
@@ -548,21 +551,27 @@ class MonitorApp:
                 # link clears within ~30s instead of staying red all session.
                 rf_word, _ = core.rf_verdict(r["recent_rf_loss_pct"])
                 op_word, _ = core.optical_verdict(r["recent_optical_loss_pct"])
+                jit_rate = r.get("jitter_rate", 0)
+                jit_word, jit_sev = core.jitter_verdict(jit_rate)
                 vals = (f"{rf_word}  -  {r['recent_rf_loss_pct']:.2f}% lost",
                         r["disconnect_events"],
                         f"{op_word}  -  {r['recent_optical_loss_pct']:.2f}% lost",
+                        f"{jit_word}  -  {jit_rate}/s",
                         batt,
                         "Up" if r["connected"] else "DOWN")
+                # Jitter colours the row too, so a snapping tracker stands out
+                # even though it never trips the binary radio-loss flag.
+                row_sev = core.worse(r["recent_severity"], jit_sev)
                 name = r.get("name")
                 label = (f"{name}  ({r['serial']})" if name
                          else r["serial"])
                 if self.tree.exists(iid):
                     self.tree.item(iid, text="    " + label, values=vals,
-                                   tags=(r["recent_severity"],))
+                                   tags=(row_sev,))
                 else:
                     self.tree.insert(node, "end", iid=iid,
                                      text="    " + label,
-                                     values=vals, tags=(r["recent_severity"],))
+                                     values=vals, tags=(row_sev,))
 
     # ---- hiding irrelevant devices ----
 
