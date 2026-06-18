@@ -17,7 +17,7 @@ from tkinter import ttk, scrolledtext, messagebox
 import vive_rf_core as core
 
 APP_TITLE = "Vive Tracker Link Monitor"
-APP_VERSION = "2026-06-10s"   # shown in the title bar to confirm the build
+APP_VERSION = "2026-06-10t"   # shown in the title bar to confirm the build
 
 # fg / bg per severity
 SEV_STYLE = {
@@ -34,12 +34,11 @@ BANNER_STYLE = {
 HEADER_BG = "#263238"
 
 COLUMNS = (
-    ("radio",   "Radio link (to dongle)",        160, "w"),
-    ("drops",   "Radio drops",                    75, "center"),
-    ("optic",   "Lighthouse (line of sight)",    160, "w"),
-    ("update",  "Pose updates",                  130, "center"),
-    ("batt",    "Battery",                        65, "center"),
-    ("link",    "Connected",                      80, "center"),
+    ("radio",   "Radio link (to dongle)",        180, "w"),
+    ("drops",   "Radio drops",                    90, "center"),
+    ("optic",   "Lighthouse (line of sight)",    180, "w"),
+    ("batt",    "Battery",                        75, "center"),
+    ("link",    "Connected",                      90, "center"),
 )
 
 LEGEND = (
@@ -159,10 +158,8 @@ class MonitorApp:
                  font=("Segoe UI", 9)).pack(side="left", padx=4)
         tk.Label(frame, text=f"Colours and % show roughly the last "
                  f"{core.RECENT_WINDOW_S:.0f}s (live); the saved report "
-                 f"covers the whole session.   \"Pose updates\" = how often the "
-                 f"pose changes (~100% when healthy); a drop can mean the "
-                 f"tracker isn't sending fresh data.   Right-click a row to hide "
-                 f"a device that isn't part of this run.", fg="#90a4ae",
+                 f"covers the whole session.   Right-click a row to hide a "
+                 f"device that isn't part of this run.", fg="#90a4ae",
                  font=("Segoe UI", 8)).pack(anchor="w", padx=2)
 
         # Shown only when devices are hidden; click to bring them all back.
@@ -533,7 +530,7 @@ class MonitorApp:
             d_vals = (f"{rf_word}  -  {a['recent_rf_loss_pct']:.2f}% lost",
                       a["dropouts"],
                       f"{op_word}  -  {a['recent_optical_loss_pct']:.2f}% lost",
-                      "", "", "")
+                      "", "")
             node = self._dongle_nodes.get(dongle)
             if node is None:
                 node = self.tree.insert("", "end", text=d_text, values=d_vals,
@@ -551,14 +548,9 @@ class MonitorApp:
                 # link clears within ~30s instead of staying red all session.
                 rf_word, _ = core.rf_verdict(r["recent_rf_loss_pct"])
                 op_word, _ = core.optical_verdict(r["recent_optical_loss_pct"])
-                # Pose updates: % of recent frames whose pose changed, plus the
-                # effective rate. Measurement only (no colour) - watch it drop
-                # if a tracker stops getting fresh data.
-                upd = f"{r.get('fresh_pct', 100):.0f}%  ({r.get('effective_hz', 0):.0f}Hz)"
                 vals = (f"{rf_word}  -  {r['recent_rf_loss_pct']:.2f}% lost",
                         r["disconnect_events"],
                         f"{op_word}  -  {r['recent_optical_loss_pct']:.2f}% lost",
-                        upd,
                         batt,
                         "Up" if r["connected"] else "DOWN")
                 name = r.get("name")
