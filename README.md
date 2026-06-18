@@ -77,16 +77,13 @@ All files are written to a `logs\` folder created next to the executable.
    radio link first), a recommendation when one dongle stands out, and a
    per-tracker table.
 2. **Text report** - `logs/<site>_<timestamp>_report.txt`, the same content
-   as the summary window in plain text. Open it with the GUI's
-   "Open report" button or with any text editor;
+   as the summary window in plain text: the verdict, per-dongle ranking,
+   per-tracker table, and a **Key events** list (every `DROP:`,
+   `RECONNECTED:`, wireless drop and pause, with timestamps) folded in at the
+   end. Open it with the GUI's "Open report" button or any text editor;
    `docs/sample_report.txt` shows an example.
 3. **CSV time series** - `logs/<site>_<timestamp>_series.csv`, one row per
    tracker per second. For Excel, pandas or Grafana (see below).
-4. **Event log** - `logs/<site>_<timestamp>_events.log`. Every radio drop
-   (`DROP:`) and recovery (`RECONNECTED:`) is written here with a full
-   timestamp and the tracker/dongle involved, so it doubles as a timeline of
-   exactly when each link went down and came back. The text report is
-   appended at the end.
 
 ### Importing into Grafana
 
@@ -153,8 +150,8 @@ installed on the target machine.
 4. Enter a location label (for example `bay3-floor`) and press
    **Start monitoring**.
 5. Run for a representative period while the equipment is in normal use.
-6. Press **Stop and save report**. The summary window opens and the CSV and
-   event log are written to a `logs\` folder next to the executable.
+6. Press **Stop and save report**. The summary window opens and the report
+   and CSV are written to a `logs\` folder next to the executable.
 
 Console version:
 

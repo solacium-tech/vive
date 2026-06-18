@@ -706,10 +706,23 @@ def build_report_lines(site, snap, generated=None):
                         f"{r['first_issue_kind']:<8}"
                         f"{fmt_clock(r['last_issue_time']):<12}"))
 
+    # Key events, folded in from what used to be a separate events.log.
     out.append(("plain", ""))
-    emit("note", "Raw data: the per-second CSV and the event log were "
-         "saved in the same folder as this report. The event log lists every "
-         "drop with its exact timestamp.")
+    out.append(("h2", "KEY EVENTS (drops, reconnects and alerts, in order)"))
+    key = [(t, m) for (t, m) in snap.get("events", [])
+           if m.startswith("ALERT") or m.startswith("INFO")]
+    if key:
+        for t, m in key:
+            text = m.split("  ", 1)[1] if "  " in m else m
+            tag = "row-crit" if m.startswith("ALERT") else "plain"
+            out.append((tag, f"  {fmt_clock(t.timestamp())}  {text}"))
+    else:
+        out.append(("plain",
+                    "  No drops, reconnects or alerts during this run."))
+
+    out.append(("plain", ""))
+    emit("note", "Raw data: the per-second CSV was saved in the same folder "
+         "as this report (one row per tracker per second).")
     return out
 
 
@@ -768,12 +781,13 @@ class RFMonitor(threading.Thread):
         self._vr = None
         self._csv_file = None
         self._csv_writer = None
-        self._event_file = None
+        # Full chronological event history (kept for the saved report; the
+        # separate events.log file has been folded into the report).
+        self.event_history = []
 
     def _log_event(self, msg):
-        if self._event_file:
-            self._event_file.write(f"{datetime.now().isoformat()}  {msg}\n")
-            self._event_file.flush()
+        with self._lock:
+            self.event_history.append((datetime.now(), msg))
 
     def _notify(self, kind, msg):
         with self._lock:
@@ -1110,7 +1124,6 @@ class RFMonitor(threading.Thread):
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe = "".join(c for c in self.site if c.isalnum() or c in "-_")
         csv_path = os.path.join(self.log_dir, f"{safe}_{stamp}_series.csv")
-        evt_path = os.path.join(self.log_dir, f"{safe}_{stamp}_events.log")
         self.report_path = os.path.join(self.log_dir,
                                         f"{safe}_{stamp}_report.txt")
         self._csv_file = open(csv_path, "w", newline="", encoding="utf-8")
@@ -1129,12 +1142,7 @@ class RFMonitor(threading.Thread):
             "wireless_drops_total",
             "pose_fresh_pct", "effective_update_hz",
         ])
-        self._event_file = open(evt_path, "w", encoding="utf-8")
-        self._event_file.write(
-            f"# RF diagnostics event log  site={self.site}  "
-            f"started={datetime.now().isoformat()}\n")
         self.csv_path = csv_path
-        self.event_path = evt_path
 
     def _write_csv(self):
         now = datetime.now()
@@ -1167,9 +1175,6 @@ class RFMonitor(threading.Thread):
             for st in self.trackers.values():
                 st.finalize(self.stopped_at)
         report = build_report_text(self.site, self.snapshot())
-        if self._event_file:
-            self._event_file.write("\n" + report + "\n")
-            self._event_file.close()
         if self._csv_file:
             self._csv_file.close()
         if getattr(self, "report_path", None):
@@ -1198,6 +1203,7 @@ class RFMonitor(threading.Thread):
                     if st.serial not in self.dismissed]
             dismissed = sorted(self.dismissed)
             notes = list(self.notifications)
+            events = list(self.event_history)
             census = list(self.census)
             self.notifications.clear()
         by_dongle = defaultdict(list)
@@ -1224,6 +1230,7 @@ class RFMonitor(threading.Thread):
             "by_dongle": dict(by_dongle),
             "aggregates": aggregates,
             "notifications": notes,
+            "events": events,
             "elapsed": elapsed,
             "census": census,
             "class_counts": dict(class_counts),

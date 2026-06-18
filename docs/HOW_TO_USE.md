@@ -127,9 +127,8 @@ the **Open report** and **Open reports folder** buttons in the status bar.
 
 | File | What it is |
 | ---- | ---------- |
-| `<label>_<timestamp>_report.txt` | The same content as the summary window, in plain text. |
+| `<label>_<timestamp>_report.txt` | The full summary plus a **Key events** list (drops, reconnects, wireless drops, pauses, with timestamps). Same content as the summary window. |
 | `<label>_<timestamp>_series.csv` | One row per tracker per second — for Excel, pandas or Grafana. |
-| `<label>_<timestamp>_events.log` | Every radio drop and reconnect with a full timestamp. |
 
 Naming trackers (optional): after the first run a `tracker_names.txt` template
 is created next to the app. It's a plain text file — **double-click to open it

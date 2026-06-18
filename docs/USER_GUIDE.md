@@ -179,14 +179,13 @@ separator too. (An older `tracker_names.csv`, if present, is still read.)
 
 ## 6. Where the files go
 
-Everything is written to a **`logs`** folder created next to the executable. Use
+Two files are written to a **`logs`** folder created next to the executable. Use
 the **Open report** and **Open reports folder** buttons in the status bar.
 
 | File | What it is |
 | ---- | ---------- |
-| `<label>_<timestamp>_report.txt` | The same content as the summary window, in plain text. |
-| `<label>_<timestamp>_series.csv` | One row per tracker per second, for Excel, pandas, Grafana, and so on. |
-| `<label>_<timestamp>_events.log` | Every radio drop and reconnect with a full timestamp. |
+| `<label>_<timestamp>_report.txt` | The full summary: verdict, per-dongle ranking, per-tracker table, and a **Key events** list (every drop, reconnect, wireless drop and pause, with timestamps). Same content as the summary window. |
+| `<label>_<timestamp>_series.csv` | The raw data: one row per tracker per second, for Excel, pandas, Grafana, and so on. |
 
 ### CSV columns
 
@@ -212,6 +211,8 @@ tools want); the `*_total` columns are cumulative since the run started.
 | `not_updating_pct_total` | % of connected time the pose was frozen (see note). |
 | `not_updating_events_total` | How many times the pose froze while connected. |
 | `wireless_drops_total` | Dongle-level wireless link drops reported by SteamVR. |
+| `pose_fresh_pct` | % of recent frames whose pose changed (~100% when the tracker is sending fresh data; a drop can mean it is being starved). |
+| `effective_update_hz` | The resulting effective pose update rate. |
 
 > **About `update_hz`.** It is derived from the device's **input** packet
 > counter, which only advances when something is wired into the tracker's

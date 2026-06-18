@@ -1,20 +1,21 @@
 ==============================================================================
  VIVE TRACKER LINK REPORT
 ==============================================================================
- Location: bay3-mixed    10 Jun 2026, 14:05    monitored for 300s    6 tracker(s)
+ Location: bay3-floor    18 Jun 2026, 16:07    monitored for 412s    6 tracker(s)
 
- RADIO PROBLEM: dongle D-FLOOR-7A21 lost its radio link 3.9% of the time (42
+ RADIO PROBLEM: dongle D-FLOOR-7A21 lost its radio link 4.7% of the time (110
  drops). The dongle, not the lighthouses, is the bottleneck.
 
  DONGLES (worst radio link first)
  ----------------------------------------------------------------------------
  Radio loss = tracker could not reach this dongle. Lighthouse loss = tracker
- could not see the base stations (not a dongle problem).
+ could not see the base stations (not a dongle problem). All percentages are
+ for the whole session; the live view showed roughly the last 30s.
    dongle             trackers  radio link            radio drops  stalls  lighthouse
-   D-FLOOR-7A21              3  FAILING  3.91% lost            42       0  Good  0.40% lost
-   D-MAST-3C04               3  Good  0.12% lost                0       0  Good  1.24% lost
+   D-FLOOR-7A21              3  FAILING  4.71% lost           110       0  Marginal  0.31% lost
+   D-MAST-3C04               3  Good  0.05% lost                0       0  Marginal  0.12% lost
 
- RECOMMENDATION: dongle D-FLOOR-7A21 has 33.5x the radio loss of the best
+ RECOMMENDATION: dongle D-FLOOR-7A21 has 100.9x the radio loss of the best
  dongle (D-MAST-3C04). Check its position: raise it 1.5-2 m on a USB
  extension, clear of the floor, metal, USB 3.0 ports/cables and other
  dongles, then run this monitor again to compare.
@@ -22,19 +23,27 @@
  TRACKERS (worst first)
  ----------------------------------------------------------------------------
    tracker               dongle            radio link             drops  longest  lighthouse             battery
-   LHB-2A41F0            D-FLOOR-7A21      FAILING  4.82% lost       17     3.2s  Good  0.30% lost           78%
-   LHB-7C0093            D-FLOOR-7A21      FAILING  3.95% lost       12     2.1s  Good  0.55% lost           64%
-   LHB-9912AB            D-FLOOR-7A21      FAILING  2.96% lost       13     1.4s  Good  0.35% lost           81%
-   LHB-5521DE            D-MAST-3C04       Good  0.14% lost           0     0.0s  Good  0.41% lost           88%
-   LHB-88AA10            D-MAST-3C04       Good  0.13% lost           0     0.0s  Marginal  3.10% lost       90%
-   LHB-1180CC            D-MAST-3C04       Good  0.08% lost           0     0.0s  Good  0.22% lost           92%
+   waist                 D-FLOOR-7A21      FAILING  5.40% lost       44     3.1s  Marginal  0.44% lost       33%
+   left-foot             D-FLOOR-7A21      FAILING  4.82% lost       37     2.4s  Marginal  0.30% lost       41%
+   right-foot            D-FLOOR-7A21      FAILING  3.91% lost       29     1.9s  Marginal  0.18% lost       47%
+   chest                 D-MAST-3C04       Good  0.08% lost           0     0.0s  Marginal  0.05% lost       78%
+   left-hip              D-MAST-3C04       Good  0.04% lost           0     0.0s  Marginal  0.10% lost       86%
+   right-hip             D-MAST-3C04       Good  0.02% lost           0     0.0s  Marginal  0.22% lost       91%
 
  FIRST ISSUE TIMES (when each tracker first dropped or degraded)
  ----------------------------------------------------------------------------
    tracker               dongle            first issue type    last issue
-   LHB-2A41F0            D-FLOOR-7A21      09:44:11    drop    09:46:20
-   LHB-7C0093            D-FLOOR-7A21      09:44:13    drop    09:46:15
-   LHB-9912AB            D-FLOOR-7A21      09:44:30    drop    09:46:00
+   left-foot             D-FLOOR-7A21      16:03:01    drop    16:07:35
+   waist                 D-FLOOR-7A21      16:03:18    drop    16:07:38
+   right-foot            D-FLOOR-7A21      16:03:27    drop    16:07:30
 
- Raw data: the per-second CSV and the event log were saved in the same folder
- as this report. The event log lists every drop with its exact timestamp.
+ KEY EVENTS (drops, reconnects and alerts, in order)
+ ----------------------------------------------------------------------------
+   16:07:41  DROP: all 3 trackers on dongle D-FLOOR-7A21 lost their radio link at the same time (waist, left-foot, right-foot)
+   16:07:41  RECONNECTED: radio link restored - left-foot (dongle D-FLOOR-7A21)
+   16:07:41  WIRELESS DROP: waist lost its dongle radio link (dongle D-FLOOR-7A21)
+   16:07:41  DROP: radio link lost - waist (dongle D-FLOOR-7A21)
+   16:07:41  RECONNECTED: radio link restored - waist (dongle D-FLOOR-7A21)
+
+ Raw data: the per-second CSV was saved in the same folder as this report
+ (one row per tracker per second).
