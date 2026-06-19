@@ -17,7 +17,7 @@ from tkinter import ttk, scrolledtext, messagebox
 import vive_rf_core as core
 
 APP_TITLE = "Vive Tracker Link Monitor"
-APP_VERSION = "2026-06-10v"   # shown in the title bar to confirm the build
+APP_VERSION = "2026-06-10w"   # shown in the title bar to confirm the build
 
 # fg / bg per severity
 SEV_STYLE = {
@@ -57,6 +57,10 @@ class MonitorApp:
         self.mon = None
         self._dongle_nodes = {}
         self._census_node = None
+        # Always defined so the summary/report helpers never hit an
+        # AttributeError if a run is stopped before these are set.
+        self.log_dir = os.path.abspath("logs")
+        self.report_path = None
         root.title(f"{APP_TITLE}  -  build {APP_VERSION}")
         root.geometry("1000x680")
         root.minsize(860, 560)
@@ -257,15 +261,19 @@ class MonitorApp:
         # 1) Stop sampling and capture what we can. Anything here that fails
         #    must NOT prevent the on-screen confirmation below.
         snap = None
+        # Capture the file paths first: they are available immediately and do
+        # not depend on the stop/join/snapshot below succeeding, so the report
+        # is always locatable (and an absolute path avoids os.path.isfile()
+        # later failing on a relative one).
+        try:
+            self.log_dir = os.path.abspath(self.mon.log_dir)
+            rp = getattr(self.mon, "report_path", None)
+            self.report_path = os.path.abspath(rp) if rp else None
+        except Exception:
+            pass
         try:
             self.mon.stop()
             self.mon.join(timeout=5)
-            self.log_dir = os.path.abspath(self.mon.log_dir)
-            # Store an absolute path: a relative one can fail os.path.isfile()
-            # later (that was why "Open report" claimed no report existed even
-            # though the file was sitting in the reports folder).
-            rp = getattr(self.mon, "report_path", None)
-            self.report_path = os.path.abspath(rp) if rp else None
             snap = self.mon.snapshot()
         except Exception as exc:
             self._log_line("alert", f"Error while stopping: {exc}")
@@ -327,7 +335,8 @@ class MonitorApp:
                         bg="#2e7d32", fg="white", anchor="w",
                         font=("Segoe UI", 12, "bold"), padx=12, pady=8)
         head.pack(fill="x")
-        path = tk.Label(win, text=f"Saved in:  {self.log_dir}", anchor="w",
+        path = tk.Label(win, text=f"Saved in:  {getattr(self, 'log_dir', '')}",
+                        anchor="w",
                         fg="#37474f", padx=12, pady=4)
         path.pack(fill="x")
         body = tk.Frame(win)
