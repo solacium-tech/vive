@@ -17,7 +17,7 @@ from tkinter import ttk, scrolledtext, messagebox
 import vive_rf_core as core
 
 APP_TITLE = "Vive Tracker Link Monitor"
-APP_VERSION = "2026-06-10w"   # shown in the title bar to confirm the build
+APP_VERSION = "2026-06-10x"   # shown in the title bar to confirm the build
 
 # fg / bg per severity
 SEV_STYLE = {
@@ -330,7 +330,11 @@ class MonitorApp:
     def _show_summary_window(self, site, snap):
         win = tk.Toplevel(self.root)
         win.title(f"Run summary - {site}  (report saved)")
-        win.geometry("920x580")
+        # Position it over the main window so it can't open hidden behind it.
+        self.root.update_idletasks()
+        rx = self.root.winfo_rootx() + 40
+        ry = self.root.winfo_rooty() + 40
+        win.geometry(f"920x580+{rx}+{ry}")
         head = tk.Label(win, text="✓  Monitoring stopped - report saved",
                         bg="#2e7d32", fg="white", anchor="w",
                         font=("Segoe UI", 12, "bold"), padx=12, pady=8)
@@ -377,12 +381,16 @@ class MonitorApp:
         text.config(state="disabled")
         tk.Button(win, text="Open reports folder", command=self._open_logs,
                   relief="flat", fg="#0277bd", cursor="hand2").pack(pady=6)
-        # Make sure the operator actually notices it.
+        # Make sure the operator actually notices it (and it never opens
+        # hidden behind the main window).
         win.transient(self.root)
+        win.update_idletasks()
+        win.deiconify()
         win.lift()
         win.focus_force()
         win.attributes("-topmost", True)
-        win.after(700, lambda: win.attributes("-topmost", False))
+        win.after(1200, lambda: win.winfo_exists() and
+                  win.attributes("-topmost", False))
 
     @staticmethod
     def _open_file(path):
