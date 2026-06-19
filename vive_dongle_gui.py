@@ -17,7 +17,7 @@ from tkinter import ttk, scrolledtext, messagebox
 import vive_rf_core as core
 
 APP_TITLE = "Vive Tracker Link Monitor"
-APP_VERSION = "2026-06-10u"   # shown in the title bar to confirm the build
+APP_VERSION = "2026-06-10v"   # shown in the title bar to confirm the build
 
 # fg / bg per severity
 SEV_STYLE = {
@@ -286,23 +286,17 @@ class MonitorApp:
         self._log_line("info", f"Monitoring stopped. Report saved: {report}")
         self.root.update_idletasks()
 
-        # 3) Modal confirmation - guaranteed to appear and require an OK.
-        messagebox.showinfo(
-            "Monitoring stopped - report saved",
-            f"Monitoring has stopped and the report has been saved.\n\n"
-            f"File:  {report}\n"
-            f"Folder:  {getattr(self, 'log_dir', '')}\n\n"
-            f"Use \"Open report\" or \"Open reports folder\" to view it.")
-
-        # 4) Detailed summary window (best-effort; never blocks the feedback).
-        if snap is not None:
-            try:
-                self._show_summary_window(site, snap)
-            except Exception as exc:
-                messagebox.showerror(
-                    APP_TITLE,
-                    f"The report was saved, but the summary view could not be "
-                    f"shown:\n{exc}")
+        # 3) Detailed summary window - the primary confirmation. It renders the
+        #    live snapshot, or falls back to the saved report file if the
+        #    snapshot is unavailable, so it shows even if step 1 hit a hiccup.
+        try:
+            self._show_summary_window(site, snap)
+        except Exception as exc:
+            messagebox.showinfo(
+                "Monitoring stopped - report saved",
+                f"Monitoring has stopped and the report has been saved.\n\n"
+                f"Folder:  {getattr(self, 'log_dir', '')}\n\n"
+                f"(The summary view could not open: {exc})")
 
     # Colours for the summary window, keyed by report line tag.
     SUMMARY_TAGS = {
@@ -347,7 +341,29 @@ class MonitorApp:
         for tag, opts in self.SUMMARY_TAGS.items():
             if opts:
                 text.tag_configure(tag, **opts)
-        for tag, line in core.build_report_lines(site, snap):
+        # Prefer the live snapshot; fall back to the saved report file so the
+        # summary still appears if the snapshot couldn't be captured.
+        lines = None
+        if snap is not None:
+            try:
+                lines = core.build_report_lines(site, snap)
+            except Exception:
+                lines = None
+        if lines is None:
+            path = getattr(self, "report_path", None)
+            if not (path and os.path.isfile(path)):
+                path = self._newest_report()
+            body_txt = ""
+            if path and os.path.isfile(path):
+                try:
+                    with open(path, encoding="utf-8") as f:
+                        body_txt = f.read()
+                except Exception:
+                    body_txt = ""
+            if not body_txt:
+                body_txt = f"Report saved in:  {getattr(self, 'log_dir', '')}"
+            lines = [("plain", ln) for ln in body_txt.splitlines()]
+        for tag, line in lines:
             text.insert("end", line + "\n", (tag,))
         text.config(state="disabled")
         tk.Button(win, text="Open reports folder", command=self._open_logs,
