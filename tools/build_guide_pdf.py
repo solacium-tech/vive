@@ -84,6 +84,7 @@ def main():
     for bad, good in GLYPHS.items():
         body = body.replace(bad, good)
     html = (f"<!doctype html><html><head><meta charset='utf-8'>"
+            f"<title>Vive Tracker Link Monitor - User Guide</title>"
             f"<style>{CSS}</style></head><body>{body}</body></html>")
     HTML(string=html, base_url=DOCS).write_pdf(PDF)
     print("wrote", PDF, f"({os.path.getsize(PDF)} bytes)")

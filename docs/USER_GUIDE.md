@@ -6,10 +6,7 @@ wrong with the radio (dongle) or optical (lighthouse) link right now, and which
 dongle is to blame?** It also saves a report you can compare from one run to the
 next.
 
-> This is a standalone guide meant to be handed out. It covers running a
-> session, reading the results, and the files the tool produces.
-
-## 1. How it works (in one paragraph)
+## 1. How it works
 
 The tool attaches to **SteamVR** (via OpenVR) and polls every tracked device
 about 250 times a second. For each tracker it measures two **independent**
@@ -43,9 +40,8 @@ aggregated **per dongle**, which is what makes a single bad dongle obvious.
 > `.exe` is unsigned. Right click it, choose **Properties**, tick **Unblock**,
 > click **OK**, or briefly turn Smart App Control off, then launch it again.
 
-When the app opens, the **title bar** ends with `build <date>` (for example
-`build 2026-06-10h`). Quote that build when reporting anything, so it is clear
-which version produced a result.
+When the app opens, the **title bar** shows the build date. Quote it when
+reporting anything, so it is clear which version produced a result.
 
 ## 3. Run a session
 
@@ -121,7 +117,7 @@ link first**, and gives a concrete **recommendation** when one dongle clearly
 stands out (for example, raise that dongle 1.5 to 2 m on a USB extension, clear
 of the floor, metal and USB 3.0 ports, then re-run and compare).
 
-## 4. Two features worth knowing
+## 4. Other features
 
 ### Hide devices that aren't part of the run
 
